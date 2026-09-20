@@ -20,27 +20,33 @@ subject_name = st.text_input("Subject Name")
 subject_code = st.text_input("Subject Code")
 subject_instructor = st.text_input("Instructor")
 
-st.write("Enter the information above and click the button below.")
-
 add_subject = st.button("➕ Add Subject")
+
+save_result = cursor.execute("INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)", (subject_name, subject_code, subject_instructor)) if add_subject and subject_name.strip() else None
+conn.commit()
 
 st.divider()
 
-st.header("📖 Subjects")
+st.header("📖 Your Subjects")
 
-cursor.execute("SELECT name, code, instructor FROM subjects ORDER BY id DESC")
+cursor.execute("SELECT id, name, code, instructor FROM subjects ORDER BY id DESC")
 subjects = cursor.fetchall()
 
-st.write("Subjects currently saved:", len(subjects))
+st.write("Total Subjects:", len(subjects))
 
 st.dataframe(
 subjects,
 column_config={
+"id": "ID",
 "name": "Subject",
 "code": "Code",
 "instructor": "Instructor"
 },
 hide_index=True
 )
+
+st.divider()
+
+st.info("💡 Enter a subject name and click Add Subject to save it.")
 
 conn.close()
