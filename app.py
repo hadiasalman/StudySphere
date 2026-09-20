@@ -20,7 +20,11 @@ conn.commit()
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 
-dark_mode = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
+dark_mode = st.sidebar.toggle(
+    "🌙 Dark Mode",
+    value=st.session_state.dark_mode
+)
+
 st.session_state.dark_mode = dark_mode
 
 bg = "#0F172A" if dark_mode else "#F8FAFC"
@@ -163,10 +167,31 @@ p, label, span {{
     margin-top: 6px;
 }}
 
+
+/* ============================= */
+/* TEAL BUTTON DESIGN */
+/* ============================= */
+
 div.stButton > button {{
+    background: #14B8A6 !important;
+    color: white !important;
+    border: 1px solid #0F766E !important;
     border-radius: 11px;
     min-height: 42px;
-    font-weight: 650;
+    font-weight: 700;
+    transition: all 0.2s ease;
+}}
+
+div.stButton > button:hover {{
+    background: #0F766E !important;
+    color: white !important;
+    border-color: #0F766E !important;
+    transform: translateY(-1px);
+}}
+
+div.stButton > button:active {{
+    background: #115E59 !important;
+    color: white !important;
 }}
 
 </style>
@@ -178,7 +203,9 @@ st.sidebar.markdown(
 """
 <div class="brand-box">
 <div class="brand-title">🎓 StudySphere</div>
-<div class="brand-subtitle">Learn smarter. Plan better. Achieve more.</div>
+<div class="brand-subtitle">
+Learn smarter. Plan better. Achieve more.
+</div>
 </div>
 """,
 unsafe_allow_html=True
@@ -217,15 +244,22 @@ cursor.execute("SELECT COUNT(*) FROM tasks WHERE completed = 0")
 pending_task_count = cursor.fetchone()[0]
 
 
+# ==========================================
+# DASHBOARD
+# ==========================================
+
 if page == 1:
 
     st.markdown(
     """
     <div class="hero">
-    <div class="hero-title">Welcome back to StudySphere 👋</div>
+    <div class="hero-title">
+    Welcome back to StudySphere 👋
+    </div>
+
     <div class="hero-text">
-    Your academic command center for subjects, assignments,
-    exams and daily study tasks.
+    Your academic command center for subjects,
+    assignments, exams and daily study tasks.
     </div>
     </div>
     """,
@@ -297,7 +331,10 @@ if page == 1:
         st.markdown(
         """
         <div class="section-card">
-        <div class="section-title">📝 Upcoming Assignments</div>
+        <div class="section-title">
+        📝 Upcoming Assignments
+        </div>
+
         <div class="section-subtitle">
         Stay ahead of your deadlines.
         </div>
@@ -323,7 +360,10 @@ if page == 1:
         st.markdown(
         """
         <div class="section-card">
-        <div class="section-title">📅 Upcoming Exams</div>
+        <div class="section-title">
+        📅 Upcoming Exams
+        </div>
+
         <div class="section-subtitle">
         Keep your exam schedule under control.
         </div>
@@ -345,35 +385,57 @@ if page == 1:
     st.markdown(
     """
     <div class="ai-card">
-    <div class="ai-title">🤖 StudySphere AI Agent</div>
+
+    <div class="ai-title">
+    🤖 StudySphere AI Agent
+    </div>
+
     <div class="ai-text">
     Coming next — an intelligent academic agent that will
     understand your StudySphere data and help you decide
     what to study, when to study it, and what needs attention.
     </div>
+
     </div>
     """,
     unsafe_allow_html=True
     )
 
 
+# ==========================================
+# SUBJECTS
+# ==========================================
+
 elif page == 2:
 
     st.header("📚 Subjects")
-    st.caption("Manage all your university subjects in one place.")
+
+    st.caption(
+        "Manage all your university subjects in one place."
+    )
 
     a, b, c = st.columns(3)
 
-    subject_name = a.text_input("Subject Name")
-    subject_code = b.text_input("Subject Code")
-    subject_instructor = c.text_input("Instructor")
+    subject_name = a.text_input(
+        "Subject Name"
+    )
+
+    subject_code = b.text_input(
+        "Subject Code"
+    )
+
+    subject_instructor = c.text_input(
+        "Instructor"
+    )
 
     add_subject = st.button(
         "➕ Add Subject",
         use_container_width=True
     )
 
-    valid_subject = bool(subject_name.strip())
+    valid_subject = bool(
+        subject_name.strip()
+    )
 
     cursor.execute(
         "INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)",
@@ -403,10 +465,15 @@ elif page == 2:
     st.markdown(
     """
     <div class="section-card">
-    <div class="section-title">Your Subjects</div>
+
+    <div class="section-title">
+    Your Subjects
+    </div>
+
     <div class="section-subtitle">
     All subjects currently saved in StudySphere.
     </div>
+
     </div>
     """,
     unsafe_allow_html=True
@@ -425,10 +492,17 @@ elif page == 2:
     )
 
 
+# ==========================================
+# ASSIGNMENTS
+# ==========================================
+
 elif page == 3:
 
     st.header("📝 Assignments")
-    st.caption("Track deadlines, priorities and completion status.")
+
+    st.caption(
+        "Track deadlines, priorities and completion status."
+    )
 
     cursor.execute(
         "SELECT id, name FROM subjects ORDER BY name"
@@ -437,17 +511,24 @@ elif page == 3:
     assignment_subject_rows = cursor.fetchall()
 
     assignment_subject_names = [
-        row[1] for row in assignment_subject_rows
+        row[1]
+        for row in assignment_subject_rows
     ]
 
     assignment_subject_ids = [
-        row[0] for row in assignment_subject_rows
+        row[0]
+        for row in assignment_subject_rows
     ]
 
     a, b = st.columns(2)
 
-    assignment_title = a.text_input("Assignment Title")
-    assignment_deadline = b.date_input("Deadline")
+    assignment_title = a.text_input(
+        "Assignment Title"
+    )
+
+    assignment_deadline = b.date_input(
+        "Deadline"
+    )
 
     assignment_description = st.text_area(
         "Description"
@@ -472,7 +553,9 @@ elif page == 3:
 
     assignment_subject_id = (
         assignment_subject_ids[
-            assignment_subject_names.index(assignment_subject)
+            assignment_subject_names.index(
+                assignment_subject
+            )
         ]
         if assignment_subject_names and assignment_subject
         else None
@@ -519,10 +602,15 @@ elif page == 3:
     st.markdown(
     """
     <div class="section-card">
-    <div class="section-title">Assignment List</div>
+
+    <div class="section-title">
+    Assignment List
+    </div>
+
     <div class="section-subtitle">
     Your saved assignments and their current status.
     </div>
+
     </div>
     """,
     unsafe_allow_html=True
@@ -544,10 +632,17 @@ elif page == 3:
     )
 
 
+# ==========================================
+# EXAMS
+# ==========================================
+
 elif page == 4:
 
     st.header("📅 Exams")
-    st.caption("Keep your exam dates, syllabus and notes organized.")
+
+    st.caption(
+        "Keep your exam dates, syllabus and notes organized."
+    )
 
     cursor.execute(
         "SELECT id, name FROM subjects ORDER BY name"
@@ -556,17 +651,24 @@ elif page == 4:
     exam_subject_rows = cursor.fetchall()
 
     exam_subject_names = [
-        row[1] for row in exam_subject_rows
+        row[1]
+        for row in exam_subject_rows
     ]
 
     exam_subject_ids = [
-        row[0] for row in exam_subject_rows
+        row[0]
+        for row in exam_subject_rows
     ]
 
     a, b = st.columns(2)
 
-    exam_title = a.text_input("Exam Title")
-    exam_date = b.date_input("Exam Date")
+    exam_title = a.text_input(
+        "Exam Title"
+    )
+
+    exam_date = b.date_input(
+        "Exam Date"
+    )
 
     exam_syllabus = st.text_area(
         "Syllabus"
@@ -583,7 +685,9 @@ elif page == 4:
 
     exam_subject_id = (
         exam_subject_ids[
-            exam_subject_names.index(exam_subject)
+            exam_subject_names.index(
+                exam_subject
+            )
         ]
         if exam_subject_names and exam_subject
         else None
@@ -629,10 +733,15 @@ elif page == 4:
     st.markdown(
     """
     <div class="section-card">
-    <div class="section-title">Exam Schedule</div>
+
+    <div class="section-title">
+    Exam Schedule
+    </div>
+
     <div class="section-subtitle">
     Your saved exams in date order.
     </div>
+
     </div>
     """,
     unsafe_allow_html=True
@@ -653,10 +762,17 @@ elif page == 4:
     )
 
 
+# ==========================================
+# STUDY PLANNER
+# ==========================================
+
 elif page == 5:
 
     st.header("✅ Study Planner")
-    st.caption("Turn your study goals into clear daily tasks.")
+
+    st.caption(
+        "Turn your study goals into clear daily tasks."
+    )
 
     cursor.execute(
         "SELECT id, name FROM subjects ORDER BY name"
@@ -665,11 +781,13 @@ elif page == 5:
     task_subject_rows = cursor.fetchall()
 
     task_subject_names = [
-        row[1] for row in task_subject_rows
+        row[1]
+        for row in task_subject_rows
     ]
 
     task_subject_ids = [
-        row[0] for row in task_subject_rows
+        row[0]
+        for row in task_subject_rows
     ]
 
     a, b = st.columns(2)
@@ -704,7 +822,9 @@ elif page == 5:
 
     task_subject_id = (
         task_subject_ids[
-            task_subject_names.index(task_subject)
+            task_subject_names.index(
+                task_subject
+            )
         ]
         if task_subject_names and task_subject
         else None
@@ -751,10 +871,15 @@ elif page == 5:
     st.markdown(
     """
     <div class="section-card">
-    <div class="section-title">Study Tasks</div>
+
+    <div class="section-title">
+    Study Tasks
+    </div>
+
     <div class="section-subtitle">
     Your daily study activities.
     </div>
+
     </div>
     """,
     unsafe_allow_html=True
