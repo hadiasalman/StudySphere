@@ -29,7 +29,6 @@ DB_NAME = "studysphere.db"
 # DATABASE
 
 # ============================================================
-
 def get_connection():
 conn = sqlite3.connect(
 DB_NAME,
