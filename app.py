@@ -269,42 +269,83 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.show_login = "Sign in"
 
 
-def call_groq_agent(api_key, messages, model="openai/gpt-oss-20b"):
+def call_gemini_agent(api_key, prompt, model="gemini-2.5-flash"):
     api_key = str(api_key or "").strip()
     if not api_key:
-        return "Please enter your Groq API key in the AI Agent page before using the agent."
-    payload = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 1800}
+        return "Please enter your Gemini API key in the AI Agent page before using the agent."
+
+    payload = {
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": "You are StudySphere AI Agent, an academic assistant for a university student. Use the student's stored StudySphere data as the primary context. Do not invent deadlines, exams, subjects, or scores. Be practical and concise. Explain educational concepts clearly instead of blindly giving answers. When prioritizing, consider exam dates, assignment deadlines, unfinished study tasks, and stated priorities. If the data is insufficient, say exactly what is missing."
+                }
+            ]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 1800,
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     request = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
+        url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
+
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
             raw = response.read().decode("utf-8")
         data = json.loads(raw)
-        choices = data.get("choices") or []
-        if not choices:
-            return "The AI service returned an empty response. Please try again."
-        message = choices[0].get("message") or {}
-        content = message.get("content")
-        if isinstance(content, list):
-            content = "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
-        content = str(content or "").strip()
-        return content or "The AI service returned an empty response. Please try again."
+        candidates = data.get("candidates") or []
+        if not candidates:
+            feedback = data.get("promptFeedback") or {}
+            block_reason = feedback.get("blockReason")
+            if block_reason:
+                return f"Gemini did not generate a response. Reason: {block_reason}."
+            return "Gemini returned an empty response. Please try again."
+
+        parts = ((candidates[0].get("content") or {}).get("parts") or [])
+        text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")]
+        answer = "".join(text_parts).strip()
+        return answer or "Gemini returned an empty response. Please try again."
+
     except urllib.error.HTTPError as exc:
         try:
             detail = exc.read().decode("utf-8")
             parsed = json.loads(detail)
-            message = parsed.get("error", {}).get("message", "AI request failed.")
+            error_info = parsed.get("error") or {}
+            message = error_info.get("message", "Gemini request failed.")
+            status = error_info.get("status", "")
         except Exception:
-            message = "AI request failed."
-        return f"AI service error: {message}"
+            message = "Gemini request failed."
+            status = ""
+
+        if exc.code == 400:
+            return f"Gemini rejected the request. Check that your API key is valid and the model is available. {message}"
+        if exc.code in (401, 403):
+            return "Gemini authentication failed. Please check that you copied the API key correctly and that the key is active."
+        if exc.code == 404:
+            return "The selected Gemini model is not available for this API key. Please try again later."
+        if exc.code == 429:
+            return "Gemini rate limit reached. Please wait a little and try again."
+        return f"Gemini service error{f' ({status})' if status else ''}: {message}"
     except urllib.error.URLError:
-        return "Could not reach the AI service. Check your internet connection and try again."
+        return "Could not reach Gemini. Check your internet connection and try again."
     except Exception:
-        return "Something went wrong while contacting the AI service. Please try again."
+        return "An unexpected Gemini error occurred. Please try again."
 
 
 def build_agent_context(auth_id):
@@ -887,9 +928,9 @@ elif st.session_state.page == 7:
     agent_left, agent_right = st.columns([1.35, 1])
     with agent_left:
         st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your API key is kept only in this browser session and is never written to the SQLite database.</div></div>', unsafe_allow_html=True)
-        agent_key = st.text_input("Groq API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
+        agent_key = st.text_input("Gemini API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
         st.session_state.ai_api_key = agent_key.strip()
-        st.caption("StudySphere uses Groq's OpenAI-compatible chat endpoint with the current openai/gpt-oss-20b model.")
+        st.caption("StudySphere uses Google Gemini 2.5 Flash. Your key is kept only in this current browser session.")
 
     with agent_right:
         context = build_agent_context(AUTH_ID)
@@ -903,8 +944,6 @@ elif st.session_state.page == 7:
     run_agent = st.button("🚀 Run AI Agent", use_container_width=True)
     if run_agent:
         agent_context_text = format_agent_context(context)
-        base_system = """You are StudySphere AI Agent, an academic assistant for a university student. Use the student's stored StudySphere data as the primary context. Do not invent deadlines, exams, subjects, or scores. Be practical and concise. Explain educational concepts clearly instead of blindly giving answers. When prioritizing, consider exam dates, assignment deadlines, unfinished study tasks, and stated priorities. If the data is insufficient, say exactly what is missing."""
-
         if agent_mode == "Ask my AI Tutor":
             user_prompt = "Answer the student's question using the StudySphere context below. Give a simple explanation first, then examples or steps where useful.\n\nStudent question:\n" + (agent_question.strip() or "Give me one useful academic recommendation based on my current data.") + "\n\nStudySphere context:\n" + agent_context_text
         elif agent_mode == "Analyze my academics":
@@ -913,7 +952,7 @@ elif st.session_state.page == 7:
             user_prompt = "Build a focused study plan from the student's actual stored data. Start with today's highest-priority actions, then give a 7-day plan with realistic sessions. Prefer urgent exams and deadlines, then weak or unfinished areas that are visible in the data. Clearly separate what is known from what is a suggested assumption.\n\nStudent request:\n" + (agent_question.strip() or "Build my focus plan for the next 7 days.") + "\n\nStudySphere context:\n" + agent_context_text
 
         with st.spinner("🤖 StudySphere AI Agent is thinking..."):
-            answer = call_groq_agent(st.session_state.ai_api_key, [{"role": "system", "content": base_system}, {"role": "user", "content": user_prompt}])
+            answer = call_gemini_agent(st.session_state.ai_api_key, user_prompt)
         st.session_state.ai_messages.append({"mode": agent_mode, "question": agent_question.strip(), "answer": answer})
 
     if st.session_state.ai_messages:
