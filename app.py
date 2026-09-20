@@ -269,84 +269,111 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.show_login = "Sign in"
 
 
-def call_gemini_agent(api_key, prompt, model="gemini-2.5-flash"):
+def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
     api_key = str(api_key or "").strip()
     if not api_key:
         return "Please enter your Gemini API key in the AI Agent page before using the agent."
 
-    payload = {
-        "systemInstruction": {
-            "parts": [
+    models_to_try = []
+    for candidate in [model, "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]:
+        if candidate not in models_to_try:
+            models_to_try.append(candidate)
+
+    last_message = "Gemini could not generate a response."
+    last_code = None
+
+    for current_model in models_to_try:
+        payload = {
+            "contents": [
                 {
-                    "text": "You are StudySphere AI Agent, an academic assistant for a university student. Use the student's stored StudySphere data as the primary context. Do not invent deadlines, exams, subjects, or scores. Be practical and concise. Explain educational concepts clearly instead of blindly giving answers. When prioritizing, consider exam dates, assignment deadlines, unfinished study tasks, and stated priorities. If the data is insufficient, say exactly what is missing."
+                    "role": "user",
+                    "parts": [{"text": prompt}],
                 }
-            ]
-        },
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1800,
-        },
-    }
+            ],
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": "You are StudySphere AI Agent, an academic assistant for a university student. Use the student's stored StudySphere data as the primary context. Do not invent deadlines, exams, subjects, or scores. Be practical and concise. Explain educational concepts clearly instead of blindly giving answers. When prioritizing, consider exam dates, assignment deadlines, unfinished study tasks, and stated priorities. If the data is insufficient, say exactly what is missing."
+                    }
+                ]
+            },
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 1800,
+            },
+        }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "x-goog-api-key": api_key,
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
 
-    try:
-        with urllib.request.urlopen(request, timeout=45) as response:
-            raw = response.read().decode("utf-8")
-        data = json.loads(raw)
-        candidates = data.get("candidates") or []
-        if not candidates:
-            feedback = data.get("promptFeedback") or {}
-            block_reason = feedback.get("blockReason")
-            if block_reason:
-                return f"Gemini did not generate a response. Reason: {block_reason}."
-            return "Gemini returned an empty response. Please try again."
-
-        parts = ((candidates[0].get("content") or {}).get("parts") or [])
-        text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")]
-        answer = "".join(text_parts).strip()
-        return answer or "Gemini returned an empty response. Please try again."
-
-    except urllib.error.HTTPError as exc:
         try:
-            detail = exc.read().decode("utf-8")
-            parsed = json.loads(detail)
-            error_info = parsed.get("error") or {}
-            message = error_info.get("message", "Gemini request failed.")
-            status = error_info.get("status", "")
-        except Exception:
-            message = "Gemini request failed."
-            status = ""
+            with urllib.request.urlopen(request, timeout=45) as response:
+                raw = response.read().decode("utf-8")
+            data = json.loads(raw)
+            candidates = data.get("candidates") or []
+            if not candidates:
+                feedback = data.get("promptFeedback") or {}
+                block_reason = feedback.get("blockReason")
+                if block_reason:
+                    return f"Gemini blocked this request. Reason: {block_reason}."
+                last_message = "Gemini returned an empty response."
+                continue
 
-        if exc.code == 400:
-            return f"Gemini rejected the request. Check that your API key is valid and the model is available. {message}"
-        if exc.code in (401, 403):
-            return "Gemini authentication failed. Please check that you copied the API key correctly and that the key is active."
-        if exc.code == 404:
-            return "The selected Gemini model is not available for this API key. Please try again later."
-        if exc.code == 429:
-            return "Gemini rate limit reached. Please wait a little and try again."
-        return f"Gemini service error{f' ({status})' if status else ''}: {message}"
-    except urllib.error.URLError:
-        return "Could not reach Gemini. Check your internet connection and try again."
-    except Exception:
-        return "An unexpected Gemini error occurred. Please try again."
+            parts = ((candidates[0].get("content") or {}).get("parts") or [])
+            text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and part.get("text")]
+            answer = "".join(text_parts).strip()
+            if answer:
+                return answer
+            last_message = "Gemini returned an empty response."
 
+        except urllib.error.HTTPError as exc:
+            last_code = exc.code
+            try:
+                detail = exc.read().decode("utf-8")
+                parsed = json.loads(detail)
+                error_info = parsed.get("error") or {}
+                message = error_info.get("message", "Gemini request failed.")
+                status = error_info.get("status", "")
+            except Exception:
+                message = "Gemini request failed."
+                status = ""
+
+            last_message = f"{message}"
+
+            # A model-specific 404 can happen when a newly created API key/project
+            # does not currently have access to that model. Try the next model.
+            if exc.code == 404:
+                continue
+
+            if exc.code == 400:
+                return f"Gemini rejected the request: {message}"
+            if exc.code in (401, 403):
+                return "Gemini authentication/permission failed. Check that the API key is active and allowed to use the Gemini API."
+            if exc.code == 429:
+                return "Gemini rate limit reached. Please wait a little and try again."
+            if status:
+                return f"Gemini service error ({status}): {message}"
+            return f"Gemini service error: {message}"
+        except urllib.error.URLError as exc:
+            return f"Could not reach Gemini. Check your internet connection. Details: {exc.reason}"
+        except Exception as exc:
+            return f"Unexpected Gemini error: {type(exc).__name__}: {exc}"
+
+    if last_code == 404:
+        return (
+            "Your Gemini API key was accepted, but the available model access for this key did not include "
+            "the models StudySphere tried. In Google AI Studio, make sure the key is an active Gemini API key "
+            "and that the Gemini API is available for its project."
+        )
+    return last_message
 
 def build_agent_context(auth_id):
     subjects = cursor.execute(
@@ -930,7 +957,7 @@ elif st.session_state.page == 7:
         st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your API key is kept only in this browser session and is never written to the SQLite database.</div></div>', unsafe_allow_html=True)
         agent_key = st.text_input("Gemini API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
         st.session_state.ai_api_key = agent_key.strip()
-        st.caption("StudySphere uses Google Gemini 2.5 Flash. Your key is kept only in this current browser session.")
+        st.caption("StudySphere uses Gemini 3.1 Flash-Lite first, with automatic fallback to other compatible Gemini text models. Your key is kept only in this current browser session.")
 
     with agent_right:
         context = build_agent_context(AUTH_ID)
