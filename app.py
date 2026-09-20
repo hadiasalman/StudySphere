@@ -1507,4 +1507,3 @@ elif page == "AI Study Plan":
 
 elif page == "Profile":
     profile_page()
-```
