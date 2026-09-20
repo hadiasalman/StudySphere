@@ -1,6 +1,10 @@
 import streamlit as st
 import sqlite3
 
+# ==========================================
+# PAGE CONFIG
+# ==========================================
+
 st.set_page_config(
     page_title="StudySphere",
     page_icon="🎓",
@@ -8,14 +12,107 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-conn = sqlite3.connect("studysphere.db", check_same_thread=False)
+# ==========================================
+# GOOGLE AUTHENTICATION
+# ==========================================
+
+if not st.user.is_logged_in:
+    st.markdown(
+        """
+        <style>
+        .login-container {
+            max-width: 650px;
+            margin: 100px auto;
+            text-align: center;
+            padding: 50px;
+            border-radius: 25px;
+            background: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.10);
+        }
+
+        .login-title {
+            font-size: 42px;
+            font-weight: 800;
+            color: #0F172A;
+        }
+
+        .login-subtitle {
+            font-size: 17px;
+            color: #64748B;
+            margin-top: 10px;
+            margin-bottom: 30px;
+        }
+
+        div.stButton > button {
+            background: #14B8A6 !important;
+            color: white !important;
+            border: 1px solid #0F766E !important;
+            border-radius: 11px;
+            min-height: 48px;
+            font-weight: 700;
+        }
+
+        div.stButton > button:hover {
+            background: #0F766E !important;
+            color: white !important;
+        }
+        </style>
+
+        <div class="login-container">
+
+        <div class="login-title">
+        🎓 StudySphere
+        </div>
+
+        <div class="login-subtitle">
+        Learn smarter. Plan better. Achieve more.
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.button(
+        "🔐 Continue with Google",
+        on_click=st.login,
+        use_container_width=True
+    )
+
+    st.stop()
+
+# ==========================================
+# DATABASE
+# ==========================================
+
+conn = sqlite3.connect(
+    "studysphere.db",
+    check_same_thread=False
+)
+
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT)")
-cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, task_date TEXT, duration INTEGER, priority TEXT, completed INTEGER DEFAULT 0, subject_id INTEGER)")
+cursor.execute(
+    "CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT)"
+)
+
+cursor.execute(
+    "CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER)"
+)
+
+cursor.execute(
+    "CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER)"
+)
+
+cursor.execute(
+    "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, task_date TEXT, duration INTEGER, priority TEXT, completed INTEGER DEFAULT 0, subject_id INTEGER)"
+)
+
 conn.commit()
+
+# ==========================================
+# DARK MODE
+# ==========================================
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
@@ -32,6 +129,10 @@ card = "#1E293B" if dark_mode else "#FFFFFF"
 text = "#F8FAFC" if dark_mode else "#0F172A"
 muted = "#CBD5E1" if dark_mode else "#64748B"
 border = "#334155" if dark_mode else "#E2E8F0"
+
+# ==========================================
+# CSS
+# ==========================================
 
 st.markdown(
 f"""
@@ -78,6 +179,25 @@ p, label, span {{
     color: {muted};
     font-size: 12px;
     margin-top: 4px;
+}}
+
+.user-box {{
+    background: {card};
+    border: 1px solid {border};
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 15px;
+}}
+
+.user-name {{
+    font-size: 15px;
+    font-weight: 700;
+}}
+
+.user-email {{
+    color: {muted} !important;
+    font-size: 11px;
+    margin-top: 3px;
 }}
 
 .hero {{
@@ -167,11 +287,6 @@ p, label, span {{
     margin-top: 6px;
 }}
 
-
-/* ============================= */
-/* TEAL BUTTON DESIGN */
-/* ============================= */
-
 div.stButton > button {{
     background: #14B8A6 !important;
     color: white !important;
@@ -199,6 +314,10 @@ div.stButton > button:active {{
 unsafe_allow_html=True
 )
 
+# ==========================================
+# SIDEBAR BRANDING
+# ==========================================
+
 st.sidebar.markdown(
 """
 <div class="brand-box">
@@ -210,6 +329,42 @@ Learn smarter. Plan better. Achieve more.
 """,
 unsafe_allow_html=True
 )
+
+# ==========================================
+# GOOGLE USER INFORMATION
+# ==========================================
+
+user_name = st.user.name if hasattr(st.user, "name") else "Student"
+user_email = st.user.email if hasattr(st.user, "email") else ""
+
+st.sidebar.markdown(
+f"""
+<div class="user-box">
+
+<div class="user-name">
+👤 {user_name}
+</div>
+
+<div class="user-email">
+{user_email}
+</div>
+
+</div>
+""",
+unsafe_allow_html=True
+)
+
+st.sidebar.button(
+    "🚪 Logout",
+    on_click=st.logout,
+    use_container_width=True
+)
+
+st.sidebar.markdown("---")
+
+# ==========================================
+# NAVIGATION
+# ==========================================
 
 page = st.sidebar.radio(
     "Navigation",
@@ -231,6 +386,10 @@ st.sidebar.caption(
     "Your personal academic AI agent is coming next."
 )
 
+# ==========================================
+# DATABASE COUNTS
+# ==========================================
+
 cursor.execute("SELECT COUNT(*) FROM subjects")
 subject_count = cursor.fetchone()[0]
 
@@ -240,9 +399,10 @@ assignment_count = cursor.fetchone()[0]
 cursor.execute("SELECT COUNT(*) FROM exams")
 exam_count = cursor.fetchone()[0]
 
-cursor.execute("SELECT COUNT(*) FROM tasks WHERE completed = 0")
+cursor.execute(
+    "SELECT COUNT(*) FROM tasks WHERE completed = 0"
+)
 pending_task_count = cursor.fetchone()[0]
-
 
 # ==========================================
 # DASHBOARD
@@ -401,7 +561,6 @@ if page == 1:
     unsafe_allow_html=True
     )
 
-
 # ==========================================
 # SUBJECTS
 # ==========================================
@@ -416,26 +575,16 @@ elif page == 2:
 
     a, b, c = st.columns(3)
 
-    subject_name = a.text_input(
-        "Subject Name"
-    )
-
-    subject_code = b.text_input(
-        "Subject Code"
-    )
-
-    subject_instructor = c.text_input(
-        "Instructor"
-    )
+    subject_name = a.text_input("Subject Name")
+    subject_code = b.text_input("Subject Code")
+    subject_instructor = c.text_input("Instructor")
 
     add_subject = st.button(
         "➕ Add Subject",
         use_container_width=True
     )
 
-    valid_subject = bool(
-        subject_name.strip()
-    )
+    valid_subject = bool(subject_name.strip())
 
     cursor.execute(
         "INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)",
@@ -491,7 +640,6 @@ elif page == 2:
         }
     )
 
-
 # ==========================================
 # ASSIGNMENTS
 # ==========================================
@@ -511,28 +659,19 @@ elif page == 3:
     assignment_subject_rows = cursor.fetchall()
 
     assignment_subject_names = [
-        row[1]
-        for row in assignment_subject_rows
+        row[1] for row in assignment_subject_rows
     ]
 
     assignment_subject_ids = [
-        row[0]
-        for row in assignment_subject_rows
+        row[0] for row in assignment_subject_rows
     ]
 
     a, b = st.columns(2)
 
-    assignment_title = a.text_input(
-        "Assignment Title"
-    )
+    assignment_title = a.text_input("Assignment Title")
+    assignment_deadline = b.date_input("Deadline")
 
-    assignment_deadline = b.date_input(
-        "Deadline"
-    )
-
-    assignment_description = st.text_area(
-        "Description"
-    )
+    assignment_description = st.text_area("Description")
 
     c1, c2, c3 = st.columns(3)
 
@@ -546,7 +685,7 @@ elif page == 3:
         ["Pending", "In Progress", "Completed"]
     )
 
-    assignment_subject = c3.selectbox(
+    assignment_subject = st.selectbox(
         "Subject",
         assignment_subject_names
     ) if assignment_subject_names else ""
@@ -631,7 +770,6 @@ elif page == 3:
         }
     )
 
-
 # ==========================================
 # EXAMS
 # ==========================================
@@ -651,32 +789,20 @@ elif page == 4:
     exam_subject_rows = cursor.fetchall()
 
     exam_subject_names = [
-        row[1]
-        for row in exam_subject_rows
+        row[1] for row in exam_subject_rows
     ]
 
     exam_subject_ids = [
-        row[0]
-        for row in exam_subject_rows
+        row[0] for row in exam_subject_rows
     ]
 
     a, b = st.columns(2)
 
-    exam_title = a.text_input(
-        "Exam Title"
-    )
+    exam_title = a.text_input("Exam Title")
+    exam_date = b.date_input("Exam Date")
 
-    exam_date = b.date_input(
-        "Exam Date"
-    )
-
-    exam_syllabus = st.text_area(
-        "Syllabus"
-    )
-
-    exam_notes = st.text_area(
-        "Notes"
-    )
+    exam_syllabus = st.text_area("Syllabus")
+    exam_notes = st.text_area("Notes")
 
     exam_subject = st.selectbox(
         "Subject",
@@ -685,9 +811,7 @@ elif page == 4:
 
     exam_subject_id = (
         exam_subject_ids[
-            exam_subject_names.index(
-                exam_subject
-            )
+            exam_subject_names.index(exam_subject)
         ]
         if exam_subject_names and exam_subject
         else None
@@ -761,7 +885,6 @@ elif page == 4:
         }
     )
 
-
 # ==========================================
 # STUDY PLANNER
 # ==========================================
@@ -781,24 +904,17 @@ elif page == 5:
     task_subject_rows = cursor.fetchall()
 
     task_subject_names = [
-        row[1]
-        for row in task_subject_rows
+        row[1] for row in task_subject_rows
     ]
 
     task_subject_ids = [
-        row[0]
-        for row in task_subject_rows
+        row[0] for row in task_subject_rows
     ]
 
     a, b = st.columns(2)
 
-    task_title = a.text_input(
-        "Study Task"
-    )
-
-    task_date = b.date_input(
-        "Study Date"
-    )
+    task_title = a.text_input("Study Task")
+    task_date = b.date_input("Study Date")
 
     c1, c2 = st.columns(2)
 
@@ -822,9 +938,7 @@ elif page == 5:
 
     task_subject_id = (
         task_subject_ids[
-            task_subject_names.index(
-                task_subject
-            )
+            task_subject_names.index(task_subject)
         ]
         if task_subject_names and task_subject
         else None
