@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, date, timedelta
 
-# ============================================================
+# ===========================================================
 # STUDYSPHERE — AI STUDENT COMPANION
 # Single-file Streamlit MVP
 # ============================================================
