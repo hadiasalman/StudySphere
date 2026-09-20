@@ -27,16 +27,7 @@ task_count = cursor.fetchone()[0]
 st.sidebar.title("🎓 StudySphere")
 st.sidebar.caption("Learn smarter. Plan better. Achieve more.")
 
-page = st.sidebar.radio(
-"Navigation",
-[
-"🏠 Dashboard",
-"📚 Subjects",
-"📝 Assignments",
-"📅 Exams",
-"✅ Study Planner"
-]
-)
+page = st.sidebar.radio("Navigation", ["🏠 Dashboard", "📚 Subjects", "📝 Assignments", "📅 Exams", "✅ Study Planner"])
 
 st.sidebar.divider()
 st.sidebar.write("📊 Quick Stats")
@@ -45,75 +36,20 @@ st.sidebar.write("📝 Assignments:", assignment_count)
 st.sidebar.write("📅 Exams:", exam_count)
 st.sidebar.write("✅ Study Tasks:", task_count)
 
-if page == "🏠 Dashboard":
-st.title("🎓 StudySphere")
+dashboard_title = "🎓 StudySphere"
+subjects_title = "📚 Subjects"
+assignments_title = "📝 Assignments"
+exams_title = "📅 Exams"
+planner_title = "✅ Study Planner"
+
+st.title(dashboard_title if page == "🏠 Dashboard" else subjects_title if page == "📚 Subjects" else assignments_title if page == "📝 Assignments" else exams_title if page == "📅 Exams" else planner_title)
+
 st.caption("Learn smarter. Plan better. Achieve more.")
+
 st.divider()
 
-```
-st.header("🏠 Dashboard")
-st.write("Welcome to your StudySphere dashboard.")
+st.write("You selected:", page)
 
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("📚 Subjects", subject_count)
-col2.metric("📝 Assignments", assignment_count)
-col3.metric("📅 Exams", exam_count)
-col4.metric("✅ Study Tasks", task_count)
-
-st.subheader("📝 Upcoming Assignments")
-
-cursor.execute(
-    "SELECT title, deadline, priority, status FROM assignments ORDER BY deadline LIMIT 5"
-)
-
-dashboard_assignments = cursor.fetchall()
-
-if dashboard_assignments:
-    st.dataframe(
-        dashboard_assignments,
-        column_config={
-            "title": "Assignment",
-            "deadline": "Deadline",
-            "priority": "Priority",
-            "status": "Status"
-        },
-        hide_index=True
-    )
-else:
-    st.info("No assignments added yet.")
-```
-
-elif page == "📚 Subjects":
-st.title("📚 Subjects")
-st.write("This is the Subjects page.")
-
-```
-st.success("Subjects page is working!")
-```
-
-elif page == "📝 Assignments":
-st.title("📝 Assignments")
-st.write("This is the Assignments page.")
-
-```
-st.success("Assignments page is working!")
-```
-
-elif page == "📅 Exams":
-st.title("📅 Exams")
-st.write("This is the Exams page.")
-
-```
-st.success("Exams page is working!")
-```
-
-elif page == "✅ Study Planner":
-st.title("✅ Study Planner")
-st.write("This is the Study Planner page.")
-
-```
-st.success("Study Planner page is working!")
-```
+st.success("Navigation is working. Each sidebar option changes the page title.")
 
 conn.close()
