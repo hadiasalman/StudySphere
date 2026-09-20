@@ -320,6 +320,98 @@ hr {{ border-color:{border}; }}
     .hero-title {{ font-size:28px; }}
     .panel {{ padding:17px; }}
 }}
+
+/* ===== PREMIUM MOTION & VISUAL LAYER ===== */
+@keyframes floatIn {
+    from { opacity:0; transform:translateY(12px); }
+    to { opacity:1; transform:translateY(0); }
+}
+@keyframes softPulse {
+    0%,100% { box-shadow:0 0 0 0 rgba(20,184,166,.16); }
+    50% { box-shadow:0 0 0 9px rgba(20,184,166,0); }
+}
+@keyframes shimmer {
+    0% { background-position:-500px 0; }
+    100% { background-position:500px 0; }
+}
+.block-container {
+    animation: floatIn .45s ease-out;
+}
+.stat-card, .panel, .page-banner, .ai-panel {
+    transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+}
+.stat-card:hover, .panel:hover {
+    transform: translateY(-4px);
+}
+.stat-card:first-child .stat-icon {
+    animation: softPulse 2.8s infinite;
+}
+.hero::after {
+    content:"";
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    background:linear-gradient(110deg,transparent 35%,rgba(255,255,255,.08) 50%,transparent 65%);
+    background-size:500px 100%;
+    animation:shimmer 7s linear infinite;
+}
+.hero > * { position:relative; z-index:1; }
+.ai-panel {
+    position:relative;
+    overflow:hidden;
+}
+.ai-panel::before {
+    content:"";
+    position:absolute;
+    width:170px;
+    height:170px;
+    right:-60px;
+    top:-70px;
+    border-radius:50%;
+    background:rgba(45,212,191,.10);
+    filter:blur(3px);
+}
+.quick-card {
+    background:linear-gradient(145deg,{card}, {card2});
+    border:1px solid {border};
+    border-radius:18px;
+    padding:18px;
+    min-height:105px;
+}
+.quick-icon {
+    font-size:22px;
+    margin-bottom:8px;
+}
+.quick-title {
+    color:{text} !important;
+    font-weight:800;
+    font-size:14px;
+}
+.quick-sub {
+    color:{muted} !important;
+    font-size:11px;
+    margin-top:3px;
+}
+.progress-shell {
+    height:9px;
+    border-radius:999px;
+    background:{border};
+    overflow:hidden;
+    margin-top:9px;
+}
+.progress-bar {
+    height:100%;
+    border-radius:999px;
+    background:linear-gradient(90deg,#14B8A6,#2DD4BF);
+}
+.section-kicker {
+    color:#0F766E !important;
+    font-size:10px;
+    font-weight:850;
+    letter-spacing:1.3px;
+    text-transform:uppercase;
+}
+
 </style>
 """,
     unsafe_allow_html=True
@@ -390,6 +482,14 @@ exams and daily study tasks — in one focused workspace.
     c3.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">🎯</div></div><div class="stat-number">{exam_count}</div><div class="stat-label">Upcoming Exams</div></div>', unsafe_allow_html=True)
     c4.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">✓</div></div><div class="stat-number">{pending_task_count}</div><div class="stat-label">Pending Tasks</div></div>', unsafe_allow_html=True)
 
+    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-kicker">Quick actions</div>', unsafe_allow_html=True)
+    q1, q2, q3, q4 = st.columns(4)
+    q1.markdown('<div class="quick-card"><div class="quick-icon">🤖</div><div class="quick-title">Ask AI Tutor</div><div class="quick-sub">Get help with difficult topics</div></div>', unsafe_allow_html=True)
+    q2.markdown('<div class="quick-card"><div class="quick-icon">📚</div><div class="quick-title">Manage Subjects</div><div class="quick-sub">Keep your courses organized</div></div>', unsafe_allow_html=True)
+    q3.markdown('<div class="quick-card"><div class="quick-icon">🎯</div><div class="quick-title">Exam Focus</div><div class="quick-sub">Stay ahead of important dates</div></div>', unsafe_allow_html=True)
+    q4.markdown('<div class="quick-card"><div class="quick-icon">⚡</div><div class="quick-title">Study Planner</div><div class="quick-sub">Turn goals into daily tasks</div></div>', unsafe_allow_html=True)
+
     cursor.execute("SELECT title, deadline, priority, status FROM assignments ORDER BY deadline LIMIT 5")
     upcoming_assignments = cursor.fetchall()
 
@@ -405,6 +505,34 @@ exams and daily study tasks — in one focused workspace.
     with right:
         st.markdown('<div class="panel"><div class="panel-head"><div><div class="panel-title">📅 Upcoming Exams</div><div class="panel-sub">Keep your exam schedule under control.</div></div></div></div>', unsafe_allow_html=True)
         st.dataframe(upcoming_exams, use_container_width=True, hide_index=True, column_config={"title":"Exam","exam_date":"Exam Date"})
+
+
+    total_items = subject_count + assignment_count + exam_count + pending_task_count
+    completed_tasks = 0
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE completed = 1")
+    completed_tasks = cursor.fetchone()[0]
+    total_tasks = completed_tasks + pending_task_count
+    task_progress = int((completed_tasks / total_tasks) * 100) if total_tasks else 0
+
+    st.markdown(
+        f"""
+<div class="panel">
+<div class="panel-head">
+<div>
+<div class="panel-title">📈 Your Study Overview</div>
+<div class="panel-sub">A quick snapshot of your current academic workspace.</div>
+</div>
+</div>
+<div style="margin-top:18px;">
+<div style="display:flex;justify-content:space-between;font-size:12px;color:{muted};">
+<span>Study tasks completed</span><strong style="color:{text};">{task_progress}%</strong>
+</div>
+<div class="progress-shell"><div class="progress-bar" style="width:{task_progress}%;"></div></div>
+</div>
+</div>
+""",
+        unsafe_allow_html=True
+    )
 
     st.markdown(
         """
@@ -551,5 +679,15 @@ elif page == 5:
 
     st.markdown('<div class="panel"><div class="panel-title">Study Tasks</div><div class="panel-sub">Your daily study activities.</div></div>', unsafe_allow_html=True)
     st.dataframe(task_list, use_container_width=True, hide_index=True, column_config={"id":"ID","title":"Task","task_date":"Date","duration":"Minutes","priority":"Priority","completed":"Completed","name":"Subject"})
+
+
+st.markdown(
+    """
+<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">
+StudySphere • Learn smarter. Plan better. Achieve more.
+</div>
+""",
+    unsafe_allow_html=True
+)
 
 conn.close()
