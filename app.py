@@ -32,23 +32,14 @@ subject_names = [row[1] for row in subject_rows]
 subject_ids = [row[0] for row in subject_rows]
 
 st.sidebar.title("🎓 StudySphere")
-st.sidebar.write("Learn smarter. Plan better. Achieve more.")
-
-st.sidebar.divider()
+st.sidebar.caption("Learn smarter. Plan better. Achieve more.")
 
 page = st.sidebar.radio(
 "Navigation",
-[
-"🏠 Dashboard",
-"📚 Subjects",
-"📝 Assignments",
-"📅 Exams",
-"✅ Study Planner"
-]
+["🏠 Dashboard", "📚 Subjects", "📝 Assignments", "📅 Exams", "✅ Study Planner"]
 )
 
 st.sidebar.divider()
-
 st.sidebar.write("📊 Quick Stats")
 st.sidebar.write("📚 Subjects:", subject_count)
 st.sidebar.write("📝 Assignments:", assignment_count)
@@ -56,18 +47,15 @@ st.sidebar.write("📅 Exams:", exam_count)
 st.sidebar.write("✅ Study Tasks:", task_count)
 
 st.sidebar.divider()
-
 st.sidebar.caption("StudySphere • AI Student Companion")
 
 st.title("🎓 StudySphere")
-st.subheader("Learn smarter. Plan better. Achieve more.")
 
 st.divider()
 
+dashboard = page == "🏠 Dashboard"
+
 st.header("🏠 Dashboard")
-
-dashboard_selected = page == "🏠 Dashboard"
-
 st.write("Welcome to your personal student dashboard.")
 
 st.metric("📚 Subjects", subject_count)
@@ -77,10 +65,10 @@ st.metric("✅ Study Tasks", task_count)
 
 st.divider()
 
-st.header("📝 Upcoming Assignments")
-
 cursor.execute("SELECT title, deadline, priority, status FROM assignments ORDER BY deadline LIMIT 5")
 upcoming_assignments = cursor.fetchall()
+
+st.subheader("📝 Upcoming Assignments")
 
 st.dataframe(
 upcoming_assignments,
@@ -95,7 +83,23 @@ hide_index=True
 
 st.divider()
 
+subjects_page = page == "📚 Subjects"
+
 st.header("📚 Subjects")
+st.write("Manage your university subjects here.")
+
+new_subject_name = st.text_input("Subject Name", key="new_subject_name")
+new_subject_code = st.text_input("Subject Code", key="new_subject_code")
+new_subject_instructor = st.text_input("Instructor", key="new_subject_instructor")
+
+add_subject = st.button("➕ Add Subject", key="add_subject")
+
+save_subject = cursor.execute(
+"INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)",
+(new_subject_name, new_subject_code, new_subject_instructor)
+) if add_subject and new_subject_name.strip() else None
+
+conn.commit()
 
 cursor.execute("SELECT name, code, instructor FROM subjects ORDER BY id DESC")
 all_subjects = cursor.fetchall()
@@ -112,26 +116,37 @@ hide_index=True
 
 st.divider()
 
+assignments_page = page == "📝 Assignments"
+
 st.header("📝 Assignments")
+st.write("Track your assignments and deadlines.")
 
-assignment_title = st.text_input("Assignment Title")
-assignment_description = st.text_area("Assignment Description")
-assignment_deadline = st.date_input("Assignment Deadline", value=date.today())
-assignment_priority = st.selectbox("Assignment Priority", ["Low", "Medium", "High"])
+new_assignment_title = st.text_input("Assignment Title", key="new_assignment_title")
+new_assignment_description = st.text_area("Description", key="new_assignment_description")
+new_assignment_deadline = st.date_input("Deadline", value=date.today(), key="new_assignment_deadline")
+new_assignment_priority = st.selectbox("Priority", ["Low", "Medium", "High"], key="new_assignment_priority")
 
-assignment_subject = st.selectbox(
-"Assignment Subject",
-["No Subject"] + subject_names
+new_assignment_subject = st.selectbox(
+"Subject",
+["No Subject"] + subject_names,
+key="new_assignment_subject"
 )
 
-assignment_subject_id = subject_ids[subject_names.index(assignment_subject)] if assignment_subject in subject_names else None
+new_assignment_subject_id = subject_ids[subject_names.index(new_assignment_subject)] if new_assignment_subject in subject_names else None
 
-add_assignment = st.button("➕ Add Assignment")
+add_assignment = st.button("➕ Add Assignment", key="add_assignment")
 
 save_assignment = cursor.execute(
 "INSERT INTO assignments (title, description, deadline, priority, status, subject_id) VALUES (?, ?, ?, ?, ?, ?)",
-(assignment_title, assignment_description, str(assignment_deadline), assignment_priority, "Pending", assignment_subject_id)
-) if add_assignment and assignment_title.strip() else None
+(
+new_assignment_title,
+new_assignment_description,
+str(new_assignment_deadline),
+new_assignment_priority,
+"Pending",
+new_assignment_subject_id
+)
+) if add_assignment and new_assignment_title.strip() else None
 
 conn.commit()
 
@@ -139,10 +154,10 @@ cursor.execute(
 "SELECT assignments.id, assignments.title, assignments.deadline, assignments.priority, assignments.status, subjects.name FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id ORDER BY assignments.deadline"
 )
 
-assignment_rows = cursor.fetchall()
+all_assignments = cursor.fetchall()
 
 st.dataframe(
-assignment_rows,
+all_assignments,
 column_config={
 "id": "ID",
 "title": "Assignment",
@@ -156,26 +171,36 @@ hide_index=True
 
 st.divider()
 
+exams_page = page == "📅 Exams"
+
 st.header("📅 Exams")
+st.write("Organize your upcoming exams.")
 
-exam_title = st.text_input("Exam Title")
-exam_date = st.date_input("Exam Date", value=date.today())
-exam_syllabus = st.text_area("Exam Syllabus")
-exam_notes = st.text_area("Exam Notes")
+new_exam_title = st.text_input("Exam Title", key="new_exam_title")
+new_exam_date = st.date_input("Exam Date", value=date.today(), key="new_exam_date")
+new_exam_syllabus = st.text_area("Syllabus", key="new_exam_syllabus")
+new_exam_notes = st.text_area("Notes", key="new_exam_notes")
 
-exam_subject = st.selectbox(
-"Exam Subject",
-["No Subject"] + subject_names
+new_exam_subject = st.selectbox(
+"Subject",
+["No Subject"] + subject_names,
+key="new_exam_subject"
 )
 
-exam_subject_id = subject_ids[subject_names.index(exam_subject)] if exam_subject in subject_names else None
+new_exam_subject_id = subject_ids[subject_names.index(new_exam_subject)] if new_exam_subject in subject_names else None
 
-add_exam = st.button("➕ Add Exam")
+add_exam = st.button("➕ Add Exam", key="add_exam")
 
 save_exam = cursor.execute(
 "INSERT INTO exams (title, exam_date, syllabus, notes, subject_id) VALUES (?, ?, ?, ?, ?)",
-(exam_title, str(exam_date), exam_syllabus, exam_notes, exam_subject_id)
-) if add_exam and exam_title.strip() else None
+(
+new_exam_title,
+str(new_exam_date),
+new_exam_syllabus,
+new_exam_notes,
+new_exam_subject_id
+)
+) if add_exam and new_exam_title.strip() else None
 
 conn.commit()
 
@@ -183,10 +208,10 @@ cursor.execute(
 "SELECT exams.id, exams.title, exams.exam_date, exams.syllabus, exams.notes, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id ORDER BY exams.exam_date"
 )
 
-exam_rows = cursor.fetchall()
+all_exams = cursor.fetchall()
 
 st.dataframe(
-exam_rows,
+all_exams,
 column_config={
 "id": "ID",
 "title": "Exam",
@@ -200,26 +225,37 @@ hide_index=True
 
 st.divider()
 
+planner_page = page == "✅ Study Planner"
+
 st.header("✅ Study Planner")
+st.write("Plan your daily study sessions.")
 
-task_title = st.text_input("Task Title")
-task_date = st.date_input("Task Date", value=date.today())
-task_duration = st.number_input("Duration (minutes)", min_value=15, max_value=600, value=60, step=15)
-task_priority = st.selectbox("Task Priority", ["Low", "Medium", "High"])
+new_task_title = st.text_input("Task Title", key="new_task_title")
+new_task_date = st.date_input("Task Date", value=date.today(), key="new_task_date")
+new_task_duration = st.number_input("Duration (minutes)", min_value=15, max_value=600, value=60, step=15, key="new_task_duration")
+new_task_priority = st.selectbox("Priority", ["Low", "Medium", "High"], key="new_task_priority")
 
-task_subject = st.selectbox(
-"Task Subject",
-["No Subject"] + subject_names
+new_task_subject = st.selectbox(
+"Subject",
+["No Subject"] + subject_names,
+key="new_task_subject"
 )
 
-task_subject_id = subject_ids[subject_names.index(task_subject)] if task_subject in subject_names else None
+new_task_subject_id = subject_ids[subject_names.index(new_task_subject)] if new_task_subject in subject_names else None
 
-add_task = st.button("➕ Add Study Task")
+add_task = st.button("➕ Add Study Task", key="add_task")
 
 save_task = cursor.execute(
 "INSERT INTO tasks (title, task_date, duration, priority, completed, subject_id) VALUES (?, ?, ?, ?, ?, ?)",
-(task_title, str(task_date), task_duration, task_priority, 0, task_subject_id)
-) if add_task and task_title.strip() else None
+(
+new_task_title,
+str(new_task_date),
+new_task_duration,
+new_task_priority,
+0,
+new_task_subject_id
+)
+) if add_task and new_task_title.strip() else None
 
 conn.commit()
 
@@ -227,10 +263,10 @@ cursor.execute(
 "SELECT tasks.id, tasks.title, tasks.task_date, tasks.duration, tasks.priority, tasks.completed, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id ORDER BY tasks.task_date"
 )
 
-task_rows = cursor.fetchall()
+all_tasks = cursor.fetchall()
 
 st.dataframe(
-task_rows,
+all_tasks,
 column_config={
 "id": "ID",
 "title": "Task",
@@ -243,8 +279,6 @@ column_config={
 hide_index=True
 )
 
-st.divider()
-
-st.success("🎉 StudySphere navigation is ready!")
+st.success("🎉 StudySphere navigation is working!")
 
 conn.close()
