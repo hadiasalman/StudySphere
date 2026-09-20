@@ -10,6 +10,7 @@ cursor = conn.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER)")
 cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER)")
+cursor.execute("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, task_date TEXT, duration INTEGER, priority TEXT, completed INTEGER, subject_id INTEGER)")
 conn.commit()
 
 st.title("🎓 StudySphere")
@@ -163,6 +164,63 @@ hide_index=True
 
 st.divider()
 
-st.success("🎉 Subjects, Assignments and Exams are all included in this version.")
+st.header("✅ Study Planner")
+
+task_title = st.text_input("Task Title", key="task_title")
+task_date = st.date_input("Task Date", value=date.today(), key="task_date")
+task_duration = st.number_input("Duration (minutes)", min_value=15, max_value=600, value=60, step=15, key="task_duration")
+task_priority = st.selectbox("Task Priority", ["Low", "Medium", "High"], key="task_priority")
+
+task_subject = st.selectbox(
+"Task Subject",
+["No Subject"] + subject_names,
+key="task_subject"
+)
+
+task_subject_id = subject_ids[subject_names.index(task_subject)] if task_subject in subject_names else None
+
+add_task = st.button("➕ Add Study Task")
+
+save_task = cursor.execute(
+"INSERT INTO tasks (title, task_date, duration, priority, completed, subject_id) VALUES (?, ?, ?, ?, ?, ?)",
+(
+task_title,
+str(task_date),
+task_duration,
+task_priority,
+0,
+task_subject_id
+)
+) if add_task and task_title.strip() else None
+
+conn.commit()
+
+cursor.execute(
+"SELECT tasks.id, tasks.title, tasks.task_date, tasks.duration, tasks.priority, tasks.completed, subjects.name "
+"FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id "
+"ORDER BY tasks.task_date"
+)
+
+task_rows = cursor.fetchall()
+
+st.write("Total Study Tasks:", len(task_rows))
+
+st.dataframe(
+task_rows,
+column_config={
+"id": "ID",
+"title": "Task",
+"task_date": "Date",
+"duration": "Minutes",
+"priority": "Priority",
+"completed": "Completed",
+"name": "Subject"
+},
+hide_index=True
+)
+
+st.divider()
+
+st.success("🎉 Study Planner has been added successfully!")
 
 conn.close()
