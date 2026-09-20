@@ -49,36 +49,59 @@ st.caption("Learn smarter. Plan better. Achieve more.")
 st.divider()
 st.write("You selected:", page)
 
-subject_name = st.text_input("Subject Name") if page == "📚 Subjects" else ""
-subject_code = st.text_input("Subject Code") if page == "📚 Subjects" else ""
-subject_instructor = st.text_input("Instructor") if page == "📚 Subjects" else ""
+subject_name = st.selectbox(
+"Subject",
+subject_names
+) if page == "📝 Assignments" and subject_names else ""
 
-add_subject = st.button("➕ Add Subject") if page == "📚 Subjects" else False
+assignment_title = st.text_input("Assignment Title") if page == "📝 Assignments" else ""
+assignment_description = st.text_area("Description") if page == "📝 Assignments" else ""
+assignment_deadline = st.date_input("Deadline") if page == "📝 Assignments" else None
+assignment_priority = st.selectbox("Priority", ["Low", "Medium", "High"]) if page == "📝 Assignments" else ""
+assignment_status = st.selectbox("Status", ["Pending", "In Progress", "Completed"]) if page == "📝 Assignments" else ""
 
-save_subject = cursor.execute(
-"INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)",
-(subject_name, subject_code, subject_instructor)
-) if add_subject and subject_name.strip() else None
+selected_subject_id = subject_ids[subject_names.index(subject_name)] if page == "📝 Assignments" and subject_name else None
 
-conn.commit() if add_subject and subject_name.strip() else None
+add_assignment = st.button("➕ Add Assignment") if page == "📝 Assignments" else False
 
-st.success("Subject added successfully!") if add_subject and subject_name.strip() else None
+assignment_saved = cursor.execute(
+"INSERT INTO assignments (title, description, deadline, priority, status, subject_id) VALUES (?, ?, ?, ?, ?, ?)",
+(
+assignment_title,
+assignment_description,
+str(assignment_deadline),
+assignment_priority,
+assignment_status,
+selected_subject_id
+)
+) if add_assignment and assignment_title.strip() and selected_subject_id else None
 
-cursor.execute("SELECT id, name, code, instructor FROM subjects ORDER BY name") if page == "📚 Subjects" else None
+conn.commit() if add_assignment and assignment_title.strip() and selected_subject_id else None
 
-subject_list = cursor.fetchall() if page == "📚 Subjects" else []
+st.success("Assignment added successfully!") if add_assignment and assignment_title.strip() and selected_subject_id else None
 
-st.subheader("Your Subjects") if page == "📚 Subjects" else None
+st.warning("Please add a Subject first.") if page == "📝 Assignments" and not subject_names else None
+
+cursor.execute(
+"SELECT assignments.id, assignments.title, assignments.description, assignments.deadline, assignments.priority, assignments.status, subjects.name FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id ORDER BY assignments.deadline"
+) if page == "📝 Assignments" else None
+
+assignment_rows = cursor.fetchall() if page == "📝 Assignments" else []
+
+st.subheader("Your Assignments") if page == "📝 Assignments" else None
 
 st.dataframe(
-subject_list,
+assignment_rows,
 column_config={
 "id": "ID",
-"name": "Subject",
-"code": "Code",
-"instructor": "Instructor"
+"title": "Assignment",
+"description": "Description",
+"deadline": "Deadline",
+"priority": "Priority",
+"status": "Status",
+"name": "Subject"
 },
 hide_index=True
-) if page == "📚 Subjects" else None
+) if page == "📝 Assignments" else None
 
 conn.close()
