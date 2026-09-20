@@ -59,7 +59,7 @@ if "reset_recovery_code" not in st.session_state:
 conn = sqlite3.connect("studysphere.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER, user_id TEXT)")
@@ -79,6 +79,8 @@ if "recovery_hash" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN recovery_hash TEXT")
 if "recovery_salt" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN recovery_salt TEXT")
+if "gemini_api_key" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN gemini_api_key TEXT")
 
 conn.commit()
 
@@ -265,6 +267,8 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.auth_id = str(auth_id)
     st.session_state.display_name = clean_name(name) or clean_email(email).split("@")[0].title()
     st.session_state.email = clean_email(email)
+    st.session_state.ai_api_key = ""
+    st.session_state.ai_messages = []
     st.session_state.page = 1
     st.session_state.show_login = "Sign in"
 
@@ -409,6 +413,8 @@ def clear_authenticated_user():
     st.session_state.auth_id = None
     st.session_state.display_name = ""
     st.session_state.email = ""
+    st.session_state.ai_api_key = ""
+    st.session_state.ai_messages = []
     st.session_state.page = 1
 
 
@@ -599,6 +605,15 @@ if not current_user:
 AUTH_ID = str(current_user[0])
 DISPLAY_NAME = str(current_user[1] or "Student")
 EMAIL = str(current_user[2] or "")
+
+# Load the saved Gemini key for this signed-in account.
+saved_gemini_key = cursor.execute(
+    "SELECT gemini_api_key FROM users WHERE auth_id = ?",
+    (AUTH_ID,),
+).fetchone()
+saved_gemini_key = str(saved_gemini_key[0] or "").strip() if saved_gemini_key else ""
+if saved_gemini_key and not st.session_state.ai_api_key:
+    st.session_state.ai_api_key = saved_gemini_key
 
 # Keep the name/email in session synchronized with the database.
 st.session_state.display_name = DISPLAY_NAME
@@ -954,10 +969,30 @@ elif st.session_state.page == 7:
 
     agent_left, agent_right = st.columns([1.35, 1])
     with agent_left:
-        st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your API key is kept only in this browser session and is never written to the SQLite database.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your Gemini key can be remembered on your StudySphere account so you do not need to paste it every time.</div></div>', unsafe_allow_html=True)
         agent_key = st.text_input("Gemini API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
-        st.session_state.ai_api_key = agent_key.strip()
-        st.caption("StudySphere uses Gemini 3.1 Flash-Lite first, with automatic fallback to other compatible Gemini text models. Your key is kept only in this current browser session.")
+        agent_key = agent_key.strip()
+        save_key = st.button("💾 Save Gemini key", use_container_width=True)
+        if save_key:
+            if not agent_key:
+                st.error("Please enter your Gemini API key first.")
+            else:
+                cursor.execute("UPDATE users SET gemini_api_key = ? WHERE auth_id = ?", (agent_key, AUTH_ID))
+                conn.commit()
+                st.session_state.ai_api_key = agent_key
+                st.success("Gemini API key saved to your StudySphere account.")
+        elif agent_key != st.session_state.ai_api_key:
+            st.session_state.ai_api_key = agent_key
+
+        remove_key = st.button("🗑️ Remove saved key", use_container_width=True)
+        if remove_key:
+            cursor.execute("UPDATE users SET gemini_api_key = NULL WHERE auth_id = ?", (AUTH_ID,))
+            conn.commit()
+            st.session_state.ai_api_key = ""
+            st.success("Saved Gemini key removed.")
+            st.rerun()
+
+        st.caption("The key is stored in your StudySphere SQLite account data. Do not commit studysphere.db to a public GitHub repository.")
 
     with agent_right:
         context = build_agent_context(AUTH_ID)
