@@ -12,12 +12,15 @@ conn.commit()
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER)")
 conn.commit()
 
+cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER)")
+conn.commit()
+
 st.title("🎓 StudySphere")
 st.caption("Learn smarter. Plan better. Achieve more.")
 
 page = st.sidebar.radio(
 "Navigation",
-["🏠 Dashboard", "📚 Subjects", "📝 Assignments"]
+["🏠 Dashboard", "📚 Subjects", "📝 Assignments", "📅 Exams"]
 )
 
 cursor.execute("SELECT COUNT(*) FROM subjects")
@@ -26,18 +29,27 @@ subject_count = cursor.fetchone()[0]
 cursor.execute("SELECT COUNT(*) FROM assignments")
 assignment_count = cursor.fetchone()[0]
 
+cursor.execute("SELECT COUNT(*) FROM exams")
+exam_count = cursor.fetchone()[0]
+
 dashboard_header = st.header("🏠 Dashboard") if page == "🏠 Dashboard" else None
-dashboard_col1, dashboard_col2 = st.columns(2) if page == "🏠 Dashboard" else (None, None)
+
+dashboard_col1, dashboard_col2, dashboard_col3 = st.columns(3) if page == "🏠 Dashboard" else (None, None, None)
 
 dashboard_metric1 = dashboard_col1.metric("📚 Subjects", subject_count) if page == "🏠 Dashboard" else None
+
 dashboard_metric2 = dashboard_col2.metric("📝 Assignments", assignment_count) if page == "🏠 Dashboard" else None
+
+dashboard_metric3 = dashboard_col3.metric("📅 Exams", exam_count) if page == "🏠 Dashboard" else None
 
 dashboard_text = st.write("Welcome to your StudySphere dashboard!") if page == "🏠 Dashboard" else None
 
 subjects_header = st.header("📚 Subjects") if page == "📚 Subjects" else None
 
 subject_name = st.text_input("Subject Name") if page == "📚 Subjects" else ""
+
 subject_code = st.text_input("Subject Code") if page == "📚 Subjects" else ""
+
 subject_instructor = st.text_input("Instructor") if page == "📚 Subjects" else ""
 
 add_subject = st.button("➕ Add Subject") if page == "📚 Subjects" else False
@@ -56,6 +68,7 @@ subject_success = st.success("Subject added successfully!") if page == "📚 Sub
 subject_error = st.error("Please enter a subject name.") if page == "📚 Subjects" and add_subject and not valid_subject else None
 
 cursor.execute("SELECT id, name, code, instructor FROM subjects ORDER BY name")
+
 subject_list = cursor.fetchall()
 
 subject_table = st.dataframe(
@@ -67,9 +80,11 @@ hide_index=True
 assignments_header = st.header("📝 Assignments") if page == "📝 Assignments" else None
 
 cursor.execute("SELECT id, name FROM subjects ORDER BY name")
+
 assignment_subject_rows = cursor.fetchall()
 
 assignment_subject_names = [row[1] for row in assignment_subject_rows]
+
 assignment_subject_ids = [row[0] for row in assignment_subject_rows]
 
 assignment_title = st.text_input("Assignment Title") if page == "📝 Assignments" else ""
@@ -117,9 +132,7 @@ assignment_success = st.success("Assignment added successfully!") if page == "�
 
 assignment_error = st.error("Enter an assignment title and make sure you have at least one subject.") if page == "📝 Assignments" and add_assignment and not valid_assignment else None
 
-cursor.execute(
-"SELECT assignments.id, assignments.title, assignments.description, assignments.deadline, assignments.priority, assignments.status, subjects.name FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id ORDER BY assignments.deadline"
-)
+cursor.execute("SELECT assignments.id, assignments.title, assignments.description, assignments.deadline, assignments.priority, assignments.status, subjects.name FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id ORDER BY assignments.deadline")
 
 assignment_list = cursor.fetchall()
 
@@ -128,5 +141,61 @@ assignment_list,
 use_container_width=True,
 hide_index=True
 ) if page == "📝 Assignments" else None
+
+exams_header = st.header("📅 Exams") if page == "📅 Exams" else None
+
+cursor.execute("SELECT id, name FROM subjects ORDER BY name")
+
+exam_subject_rows = cursor.fetchall()
+
+exam_subject_names = [row[1] for row in exam_subject_rows]
+
+exam_subject_ids = [row[0] for row in exam_subject_rows]
+
+exam_title = st.text_input("Exam Title") if page == "📅 Exams" else ""
+
+exam_date = st.date_input("Exam Date") if page == "📅 Exams" else None
+
+exam_syllabus = st.text_area("Syllabus") if page == "📅 Exams" else ""
+
+exam_notes = st.text_area("Notes") if page == "📅 Exams" else ""
+
+exam_subject = st.selectbox(
+"Subject",
+exam_subject_names
+) if page == "📅 Exams" and exam_subject_names else ""
+
+exam_subject_id = exam_subject_ids[exam_subject_names.index(exam_subject)] if page == "📅 Exams" and exam_subject_names and exam_subject else None
+
+add_exam = st.button("➕ Add Exam") if page == "📅 Exams" else False
+
+valid_exam = bool(exam_title.strip()) and bool(exam_subject_names)
+
+insert_exam = cursor.execute(
+"INSERT INTO exams (title, exam_date, syllabus, notes, subject_id) VALUES (?, ?, ?, ?, ?)",
+(
+exam_title.strip(),
+str(exam_date),
+exam_syllabus.strip(),
+exam_notes.strip(),
+exam_subject_id
+)
+) if page == "📅 Exams" and add_exam and valid_exam else None
+
+commit_exam = conn.commit() if page == "📅 Exams" and add_exam and valid_exam else None
+
+exam_success = st.success("Exam added successfully!") if page == "📅 Exams" and add_exam and valid_exam else None
+
+exam_error = st.error("Enter an exam title and make sure you have at least one subject.") if page == "📅 Exams" and add_exam and not valid_exam else None
+
+cursor.execute("SELECT exams.id, exams.title, exams.exam_date, exams.syllabus, exams.notes, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id ORDER BY exams.exam_date")
+
+exam_list = cursor.fetchall()
+
+exam_table = st.dataframe(
+exam_list,
+use_container_width=True,
+hide_index=True
+) if page == "📅 Exams" else None
 
 conn.close()
