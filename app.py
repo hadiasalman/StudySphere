@@ -47,9 +47,38 @@ st.title(dashboard_title if page == "🏠 Dashboard" else subjects_title if page
 st.caption("Learn smarter. Plan better. Achieve more.")
 
 st.divider()
-
 st.write("You selected:", page)
 
-st.success("Navigation is working. Each sidebar option changes the page title.")
+subject_name = st.text_input("Subject Name") if page == "📚 Subjects" else ""
+subject_code = st.text_input("Subject Code") if page == "📚 Subjects" else ""
+subject_instructor = st.text_input("Instructor") if page == "📚 Subjects" else ""
+
+add_subject = st.button("➕ Add Subject") if page == "📚 Subjects" else False
+
+save_subject = cursor.execute(
+"INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)",
+(subject_name, subject_code, subject_instructor)
+) if add_subject and subject_name.strip() else None
+
+conn.commit() if add_subject and subject_name.strip() else None
+
+st.success("Subject added successfully!") if add_subject and subject_name.strip() else None
+
+cursor.execute("SELECT id, name, code, instructor FROM subjects ORDER BY name") if page == "📚 Subjects" else None
+
+subject_list = cursor.fetchall() if page == "📚 Subjects" else []
+
+st.subheader("Your Subjects") if page == "📚 Subjects" else None
+
+st.dataframe(
+subject_list,
+column_config={
+"id": "ID",
+"name": "Subject",
+"code": "Code",
+"instructor": "Instructor"
+},
+hide_index=True
+) if page == "📚 Subjects" else None
 
 conn.close()
