@@ -498,7 +498,7 @@ nav_options = [
 ]
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
-st.session_state.page = dict(nav_options)[selected_label]
+st.session_state.page = dict((label, page_id) for page_id, label in nav_options)[selected_label]
 
 st.sidebar.markdown("---")
 st.sidebar.markdown('<div class="sidebar-label">Intelligence</div>', unsafe_allow_html=True)
