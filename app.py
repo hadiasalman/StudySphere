@@ -11,6 +11,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTO
 
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER)")
 
+cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER)")
+
 conn.commit()
 
 st.title("🎓 StudySphere")
@@ -18,7 +20,7 @@ st.subheader("Learn smarter. Plan better. Achieve more.")
 
 st.divider()
 
-st.header("📚 Add Subject")
+st.header("📚 Subjects")
 
 subject_name = st.text_input("Subject Name")
 subject_code = st.text_input("Subject Code")
@@ -27,9 +29,8 @@ subject_instructor = st.text_input("Instructor")
 add_subject = st.button("➕ Add Subject")
 
 save_subject = cursor.execute("INSERT INTO subjects (name, code, instructor) VALUES (?, ?, ?)", (subject_name, subject_code, subject_instructor)) if add_subject and subject_name.strip() else None
-conn.commit()
 
-st.divider()
+conn.commit()
 
 cursor.execute("SELECT id, name FROM subjects ORDER BY name")
 subject_rows = cursor.fetchall()
@@ -37,48 +38,50 @@ subject_rows = cursor.fetchall()
 subject_names = [row[1] for row in subject_rows]
 subject_ids = [row[0] for row in subject_rows]
 
-st.header("📝 Add Assignment")
+st.divider()
 
-assignment_title = st.text_input("Assignment Title")
-assignment_description = st.text_area("Assignment Description")
-assignment_deadline = st.date_input("Deadline", value=date.today())
-assignment_priority = st.selectbox("Priority", ["Low", "Medium", "High"])
+st.header("📅 Add Exam")
 
-selected_subject = st.selectbox("Subject", ["No Subject"] + subject_names)
+exam_title = st.text_input("Exam Title")
+exam_date = st.date_input("Exam Date", value=date.today())
+exam_syllabus = st.text_area("Syllabus")
+exam_notes = st.text_area("Exam Notes")
 
-selected_subject_id = subject_ids[subject_names.index(selected_subject)] if selected_subject in subject_names else None
+selected_exam_subject = st.selectbox("Exam Subject", ["No Subject"] + subject_names)
 
-add_assignment = st.button("➕ Add Assignment")
+exam_subject_id = subject_ids[subject_names.index(selected_exam_subject)] if selected_exam_subject in subject_names else None
 
-save_assignment = cursor.execute(
-"INSERT INTO assignments (title, description, deadline, priority, status, subject_id) VALUES (?, ?, ?, ?, ?, ?)",
-(assignment_title, assignment_description, str(assignment_deadline), assignment_priority, "Pending", selected_subject_id)
-) if add_assignment and assignment_title.strip() else None
+add_exam = st.button("➕ Add Exam")
+
+save_exam = cursor.execute(
+"INSERT INTO exams (title, exam_date, syllabus, notes, subject_id) VALUES (?, ?, ?, ?, ?)",
+(exam_title, str(exam_date), exam_syllabus, exam_notes, exam_subject_id)
+) if add_exam and exam_title.strip() else None
 
 conn.commit()
 
 st.divider()
 
-st.header("📋 Your Assignments")
+st.header("📋 Upcoming Exams")
 
 cursor.execute(
-"SELECT assignments.id, assignments.title, assignments.deadline, assignments.priority, assignments.status, subjects.name "
-"FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id "
-"ORDER BY assignments.deadline"
+"SELECT exams.id, exams.title, exams.exam_date, exams.syllabus, exams.notes, subjects.name "
+"FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id "
+"ORDER BY exams.exam_date"
 )
 
-assignments = cursor.fetchall()
+exams = cursor.fetchall()
 
-st.write("Total Assignments:", len(assignments))
+st.write("Total Exams:", len(exams))
 
 st.dataframe(
-assignments,
+exams,
 column_config={
 "id": "ID",
-"title": "Assignment",
-"deadline": "Deadline",
-"priority": "Priority",
-"status": "Status",
+"title": "Exam",
+"exam_date": "Date",
+"syllabus": "Syllabus",
+"notes": "Notes",
 "name": "Subject"
 },
 hide_index=True
@@ -86,6 +89,6 @@ hide_index=True
 
 st.divider()
 
-st.info("💡 Add your subjects first, then select a subject when creating an assignment.")
+st.info("💡 Add an exam with its date, syllabus and subject to keep your exam schedule organized.")
 
 conn.close()
