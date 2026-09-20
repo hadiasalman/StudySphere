@@ -1,1350 +1,1789 @@
 import streamlit as st
 import sqlite3
-import json
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
-# ===========================================================
+# ============================================================
+
 # STUDYSPHERE — AI STUDENT COMPANION
+
 # Single-file Streamlit MVP
+
 # ============================================================
 
 st.set_page_config(
-    page_title="StudySphere",
-    page_icon="🎓",
-    layout="wide",
-    initial_sidebar_state="expanded"
+page_title="StudySphere",
+page_icon="🎓",
+layout="wide",
+initial_sidebar_state="expanded"
 )
 
 # ============================================================
+
 # DATABASE
+
 # ============================================================
 
 DB_NAME = "studysphere.db"
 
-
 def get_connection():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
+conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+conn.row_factory = sqlite3.Row
+return conn
 
 def init_database():
-    conn = get_connection()
-    cursor = conn.cursor()
+conn = get_connection()
+cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS profile (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            email TEXT,
-            university TEXT,
-            degree TEXT,
-            semester TEXT,
-            target_gpa REAL,
-            created_at TEXT
-        )
-    """)
+```
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS profile (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        email TEXT,
+        university TEXT,
+        degree TEXT,
+        semester TEXT,
+        target_gpa REAL,
+        created_at TEXT
+    )
+""")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS subjects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            code TEXT,
-            instructor TEXT,
-            description TEXT,
-            created_at TEXT
-        )
-    """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS subjects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        code TEXT,
+        instructor TEXT,
+        description TEXT,
+        created_at TEXT
+    )
+""")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS assignments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            deadline TEXT,
-            priority TEXT,
-            status TEXT,
-            subject_id INTEGER,
-            created_at TEXT
-        )
-    """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        deadline TEXT,
+        priority TEXT,
+        status TEXT,
+        subject_id INTEGER,
+        created_at TEXT
+    )
+""")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS exams (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            exam_date TEXT,
-            syllabus TEXT,
-            notes TEXT,
-            subject_id INTEGER,
-            created_at TEXT
-        )
-    """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS exams (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        exam_date TEXT,
+        syllabus TEXT,
+        notes TEXT,
+        subject_id INTEGER,
+        created_at TEXT
+    )
+""")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            task_date TEXT,
-            duration INTEGER,
-            priority TEXT,
-            completed INTEGER DEFAULT 0,
-            subject_id INTEGER,
-            created_at TEXT
-        )
-    """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        task_date TEXT,
+        duration INTEGER,
+        priority TEXT,
+        completed INTEGER DEFAULT 0,
+        subject_id INTEGER,
+        created_at TEXT
+    )
+""")
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS study_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            content TEXT,
-            created_at TEXT
-        )
-    """)
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS study_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        content TEXT,
+        created_at TEXT
+    )
+""")
 
-    conn.commit()
-    conn.close()
-
+conn.commit()
+conn.close()
+```
 
 init_database()
 
-
 # ============================================================
+
 # DATABASE HELPERS
+
 # ============================================================
 
 def execute_query(query, params=(), fetch=False):
-    conn = get_connection()
-    cursor = conn.cursor()
+conn = get_connection()
+cursor = conn.cursor()
 
-    cursor.execute(query, params)
+```
+cursor.execute(query, params)
 
-    if fetch:
-        result = cursor.fetchall()
-        conn.close()
-        return result
-
-    conn.commit()
-    last_id = cursor.lastrowid
+if fetch:
+    result = cursor.fetchall()
     conn.close()
-    return last_id
+    return result
 
+conn.commit()
+last_id = cursor.lastrowid
+conn.close()
+return last_id
+```
 
 # ============================================================
+
 # PROFILE
+
 # ============================================================
 
 def get_profile():
-    rows = execute_query(
-        "SELECT * FROM profile LIMIT 1",
-        fetch=True
-    )
-    return rows[0] if rows else None
-
+rows = execute_query(
+"SELECT * FROM profile LIMIT 1",
+fetch=True
+)
+return rows[0] if rows else None
 
 def save_profile(
-    name,
-    email,
-    university,
-    degree,
-    semester,
-    target_gpa
+name,
+email,
+university,
+degree,
+semester,
+target_gpa
 ):
-    existing = get_profile()
+existing = get_profile()
 
-    if existing:
-        execute_query("""
-            UPDATE profile
-            SET name=?,
-                email=?,
-                university=?,
-                degree=?,
-                semester=?,
-                target_gpa=?
-            WHERE id=?
-        """, (
-            name,
-            email,
-            university,
-            degree,
-            semester,
-            target_gpa,
-            existing["id"]
-        ))
-    else:
-        execute_query("""
-            INSERT INTO profile
-            (name,email,university,degree,semester,target_gpa,created_at)
-            VALUES (?,?,?,?,?,?,?)
-        """, (
-            name,
-            email,
-            university,
-            degree,
-            semester,
-            target_gpa,
-            datetime.now().isoformat()
-        ))
-
+```
+if existing:
+    execute_query("""
+        UPDATE profile
+        SET name=?,
+            email=?,
+            university=?,
+            degree=?,
+            semester=?,
+            target_gpa=?
+        WHERE id=?
+    """, (
+        name,
+        email,
+        university,
+        degree,
+        semester,
+        target_gpa,
+        existing["id"]
+    ))
+else:
+    execute_query("""
+        INSERT INTO profile
+        (name,email,university,degree,semester,target_gpa,created_at)
+        VALUES (?,?,?,?,?,?,?)
+    """, (
+        name,
+        email,
+        university,
+        degree,
+        semester,
+        target_gpa,
+        datetime.now().isoformat()
+    ))
+```
 
 # ============================================================
+
 # SUBJECTS
+
 # ============================================================
 
 def get_subjects():
-    return execute_query(
-        "SELECT * FROM subjects ORDER BY name",
-        fetch=True
-    )
-
+return execute_query(
+"SELECT * FROM subjects ORDER BY name",
+fetch=True
+)
 
 def add_subject(name, code, instructor, description):
-    execute_query("""
-        INSERT INTO subjects
-        (name,code,instructor,description,created_at)
-        VALUES (?,?,?,?,?)
-    """, (
-        name,
-        code,
-        instructor,
-        description,
-        datetime.now().isoformat()
-    ))
-
+execute_query("""
+INSERT INTO subjects
+(name,code,instructor,description,created_at)
+VALUES (?,?,?,?,?)
+""", (
+name,
+code,
+instructor,
+description,
+datetime.now().isoformat()
+))
 
 def delete_subject(subject_id):
-    execute_query(
-        "DELETE FROM subjects WHERE id=?",
-        (subject_id,)
-    )
-
+execute_query(
+"DELETE FROM subjects WHERE id=?",
+(subject_id,)
+)
 
 # ============================================================
+
 # ASSIGNMENTS
+
 # ============================================================
 
 def get_assignments():
-    return execute_query("""
-        SELECT assignments.*, subjects.name AS subject_name
-        FROM assignments
-        LEFT JOIN subjects
-        ON assignments.subject_id = subjects.id
-        ORDER BY deadline ASC
-    """, fetch=True)
-
+return execute_query("""
+SELECT assignments.*, subjects.name AS subject_name
+FROM assignments
+LEFT JOIN subjects
+ON assignments.subject_id = subjects.id
+ORDER BY deadline ASC
+""", fetch=True)
 
 def add_assignment(
-    title,
-    description,
-    deadline,
-    priority,
-    subject_id
+title,
+description,
+deadline,
+priority,
+subject_id
 ):
-    execute_query("""
-        INSERT INTO assignments
-        (title,description,deadline,priority,status,subject_id,created_at)
-        VALUES (?,?,?,?,?,?,?)
-    """, (
-        title,
-        description,
-        deadline,
-        priority,
-        "Pending",
-        subject_id,
-        datetime.now().isoformat()
-    ))
-
+execute_query("""
+INSERT INTO assignments
+(title,description,deadline,priority,status,subject_id,created_at)
+VALUES (?,?,?,?,?,?,?)
+""", (
+title,
+description,
+deadline,
+priority,
+"Pending",
+subject_id,
+datetime.now().isoformat()
+))
 
 def update_assignment_status(assignment_id, status):
-    execute_query("""
-        UPDATE assignments
-        SET status=?
-        WHERE id=?
-    """, (status, assignment_id))
-
+execute_query("""
+UPDATE assignments
+SET status=?
+WHERE id=?
+""", (status, assignment_id))
 
 def delete_assignment(assignment_id):
-    execute_query(
-        "DELETE FROM assignments WHERE id=?",
-        (assignment_id,)
-    )
-
+execute_query(
+"DELETE FROM assignments WHERE id=?",
+(assignment_id,)
+)
 
 # ============================================================
+
 # EXAMS
+
 # ============================================================
 
 def get_exams():
-    return execute_query("""
-        SELECT exams.*, subjects.name AS subject_name
-        FROM exams
-        LEFT JOIN subjects
-        ON exams.subject_id = subjects.id
-        ORDER BY exam_date ASC
-    """, fetch=True)
-
+return execute_query("""
+SELECT exams.*, subjects.name AS subject_name
+FROM exams
+LEFT JOIN subjects
+ON exams.subject_id = subjects.id
+ORDER BY exam_date ASC
+""", fetch=True)
 
 def add_exam(
-    title,
-    exam_date,
-    syllabus,
-    notes,
-    subject_id
+title,
+exam_date,
+syllabus,
+notes,
+subject_id
 ):
-    execute_query("""
-        INSERT INTO exams
-        (title,exam_date,syllabus,notes,subject_id,created_at)
-        VALUES (?,?,?,?,?,?)
-    """, (
-        title,
-        exam_date,
-        syllabus,
-        notes,
-        subject_id,
-        datetime.now().isoformat()
-    ))
-
+execute_query("""
+INSERT INTO exams
+(title,exam_date,syllabus,notes,subject_id,created_at)
+VALUES (?,?,?,?,?,?)
+""", (
+title,
+exam_date,
+syllabus,
+notes,
+subject_id,
+datetime.now().isoformat()
+))
 
 def delete_exam(exam_id):
-    execute_query(
-        "DELETE FROM exams WHERE id=?",
-        (exam_id,)
-    )
-
+execute_query(
+"DELETE FROM exams WHERE id=?",
+(exam_id,)
+)
 
 # ============================================================
+
 # TASKS
+
 # ============================================================
 
 def get_tasks():
-    return execute_query("""
-        SELECT tasks.*, subjects.name AS subject_name
-        FROM tasks
-        LEFT JOIN subjects
-        ON tasks.subject_id = subjects.id
-        ORDER BY task_date ASC
-    """, fetch=True)
-
+return execute_query("""
+SELECT tasks.*, subjects.name AS subject_name
+FROM tasks
+LEFT JOIN subjects
+ON tasks.subject_id = subjects.id
+ORDER BY task_date ASC
+""", fetch=True)
 
 def add_task(
-    title,
-    task_date,
-    duration,
-    priority,
-    subject_id
+title,
+task_date,
+duration,
+priority,
+subject_id
 ):
-    execute_query("""
-        INSERT INTO tasks
-        (title,task_date,duration,priority,completed,subject_id,created_at)
-        VALUES (?,?,?,?,?,?,?)
-    """, (
-        title,
-        task_date,
-        duration,
-        priority,
-        0,
-        subject_id,
-        datetime.now().isoformat()
-    ))
-
+execute_query("""
+INSERT INTO tasks
+(title,task_date,duration,priority,completed,subject_id,created_at)
+VALUES (?,?,?,?,?,?,?)
+""", (
+title,
+task_date,
+duration,
+priority,
+0,
+subject_id,
+datetime.now().isoformat()
+))
 
 def update_task(task_id, completed):
-    execute_query("""
-        UPDATE tasks
-        SET completed=?
-        WHERE id=?
-    """, (
-        int(completed),
-        task_id
-    ))
-
+execute_query("""
+UPDATE tasks
+SET completed=?
+WHERE id=?
+""", (
+int(completed),
+task_id
+))
 
 def delete_task(task_id):
-    execute_query(
-        "DELETE FROM tasks WHERE id=?",
-        (task_id,)
-    )
-
+execute_query(
+"DELETE FROM tasks WHERE id=?",
+(task_id,)
+)
 
 # ============================================================
+
 # AI / GEMINI
+
 # ============================================================
 
 def get_gemini_client():
-    try:
-        from google import genai
+try:
+from google import genai
 
-        api_key = None
+```
+    api_key = None
 
-        # Streamlit Cloud secrets
-        if hasattr(st, "secrets"):
-            try:
-                api_key = st.secrets.get("GEMINI_API_KEY")
-            except Exception:
-                pass
+    if hasattr(st, "secrets"):
+        try:
+            api_key = st.secrets.get("GEMINI_API_KEY")
+        except Exception:
+            pass
 
-        # Local environment
-        if not api_key:
-            api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
 
-        if not api_key:
-            return None
-
-        return genai.Client(api_key=api_key)
-
-    except Exception:
+    if not api_key:
         return None
 
+    return genai.Client(api_key=api_key)
+
+except Exception:
+    return None
+```
 
 def ask_gemini(prompt):
-    client = get_gemini_client()
+client = get_gemini_client()
 
-    if not client:
-        return (
-            "Gemini is not configured yet.\n\n"
-            "Add your GEMINI_API_KEY to Streamlit Secrets "
-            "to activate the AI features."
-        )
+```
+if not client:
+    return (
+        "Gemini is not configured yet.\n\n"
+        "Add your GEMINI_API_KEY to Streamlit Secrets "
+        "to activate the AI features."
+    )
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
+try:
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
 
-        return response.text
+    return response.text
 
-    except Exception as e:
-        return f"AI error: {str(e)}"
-
+except Exception as e:
+    return f"AI error: {str(e)}"
+```
 
 # ============================================================
-# CUSTOM CSS
+
+# CUSTOM CSS — GLOBAL LIGHT / DARK MODE
+
 # ============================================================
 
 def apply_css(dark_mode=False):
 
-    if dark_mode:
-        background = "#0f172a"
-        card = "#1e293b"
-        text = "#f8fafc"
-        muted = "#94a3b8"
-    else:
-        background = "#f8fafc"
-        card = "#ffffff"
-        text = "#0f172a"
-        muted = "#64748b"
+```
+if dark_mode:
+    background = "#0f172a"
+    card = "#1e293b"
+    text = "#ffffff"
+    muted = "#cbd5e1"
+    input_background = "#1e293b"
+    border = "rgba(255,255,255,0.18)"
+else:
+    background = "#f8fafc"
+    card = "#ffffff"
+    text = "#000000"
+    muted = "#000000"
+    input_background = "#ffffff"
+    border = "rgba(0,0,0,0.15)"
 
-    st.markdown(
-        f"""
-        <style>
+st.markdown(
+    f"""
+    <style>
 
-        .stApp {{
-            background: {background};
-        }}
+    /* =====================================================
+       GLOBAL APP TEXT
+       ===================================================== */
 
-        .main-title {{
-            font-size: 2.5rem;
-            font-weight: 800;
-            color: {text};
-            margin-bottom: 0;
-        }}
+    .stApp {{
+        background: {background} !important;
+        color: {text} !important;
+    }}
 
-        .subtitle {{
-            color: {muted};
-            font-size: 1rem;
-            margin-bottom: 25px;
-        }}
+    .stApp * {{
+        color: {text} !important;
+    }}
 
-        .stat-card {{
-            background: {card};
-            border-radius: 16px;
-            padding: 22px;
-            border: 1px solid rgba(128,128,128,0.15);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.04);
-        }}
+    /* Markdown */
+    .stMarkdown,
+    .stMarkdown p,
+    .stMarkdown span,
+    .stMarkdown div,
+    .stMarkdown li,
+    .stMarkdown strong,
+    .stMarkdown em {{
+        color: {text} !important;
+    }}
 
-        .stat-number {{
-            font-size: 2rem;
-            font-weight: 800;
-            color: {text};
-        }}
+    /* Paragraphs and normal text */
+    p, span, label, li, td, th {{
+        color: {text} !important;
+    }}
 
-        .stat-label {{
-            color: {muted};
-            font-size: 0.9rem;
-        }}
+    /* =====================================================
+       HEADINGS
+       ===================================================== */
 
-        .section-title {{
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: {text};
-            margin-top: 25px;
-            margin-bottom: 15px;
-        }}
+    h1, h2, h3, h4, h5, h6 {{
+        color: {text} !important;
+    }}
 
-        .welcome {{
-            background: linear-gradient(
-                135deg,
-                #6366f1,
-                #8b5cf6
-            );
-            color: white;
-            padding: 28px;
-            border-radius: 20px;
-            margin-bottom: 25px;
-        }}
+    [data-testid="stTitle"] {{
+        color: {text} !important;
+    }}
 
-        .welcome h1 {{
-            margin: 0;
-            font-size: 2rem;
-        }}
+    /* =====================================================
+       SIDEBAR
+       ===================================================== */
 
-        .welcome p {{
-            margin-top: 8px;
-            opacity: 0.9;
-        }}
+    section[data-testid="stSidebar"] {{
+        background: {background} !important;
+    }}
 
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    section[data-testid="stSidebar"] * {{
+        color: {text} !important;
+    }}
 
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] div {{
+        color: {text} !important;
+    }}
+
+    /* Sidebar navigation buttons */
+    section[data-testid="stSidebar"] button {{
+        color: {text} !important;
+        background-color: transparent !important;
+    }}
+
+    section[data-testid="stSidebar"] button p {{
+        color: {text} !important;
+    }}
+
+    /* Sidebar captions */
+    section[data-testid="stSidebar"]
+    [data-testid="stCaptionContainer"] {{
+        color: {muted} !important;
+    }}
+
+    /* =====================================================
+       INPUT FIELDS
+       ===================================================== */
+
+    input,
+    textarea {{
+        color: {text} !important;
+        background-color: {input_background} !important;
+        border-color: {border} !important;
+        caret-color: {text} !important;
+    }}
+
+    input::placeholder,
+    textarea::placeholder {{
+        color: {muted} !important;
+        opacity: 0.75 !important;
+    }}
+
+    /* =====================================================
+       SELECTBOX
+       ===================================================== */
+
+    div[data-baseweb="select"] {{
+        background-color: {input_background} !important;
+    }}
+
+    div[data-baseweb="select"] * {{
+        color: {text} !important;
+    }}
+
+    div[data-baseweb="select"] > div {{
+        background-color: {input_background} !important;
+        border-color: {border} !important;
+    }}
+
+    /* Selectbox dropdown */
+    div[data-baseweb="popover"] {{
+        background-color: {input_background} !important;
+    }}
+
+    div[data-baseweb="popover"] * {{
+        color: {text} !important;
+    }}
+
+    ul[role="listbox"] {{
+        background-color: {input_background} !important;
+    }}
+
+    ul[role="listbox"] li {{
+        background-color: {input_background} !important;
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       DATE INPUT
+       ===================================================== */
+
+    input[type="date"] {{
+        color: {text} !important;
+        background-color: {input_background} !important;
+    }}
+
+    /* =====================================================
+       NUMBER INPUT
+       ===================================================== */
+
+    [data-testid="stNumberInput"] input {{
+        color: {text} !important;
+        background-color: {input_background} !important;
+    }}
+
+    [data-testid="stNumberInput"] button {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       BUTTONS
+       ===================================================== */
+
+    .stButton button,
+    .stFormSubmitButton button {{
+        color: {text} !important;
+        border-color: {border} !important;
+        background-color: {card} !important;
+    }}
+
+    .stButton button *,
+    .stFormSubmitButton button * {{
+        color: {text} !important;
+    }}
+
+    .stButton button p,
+    .stFormSubmitButton button p {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       CHECKBOX
+       ===================================================== */
+
+    .stCheckbox label,
+    .stCheckbox label span,
+    .stCheckbox label p {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stCheckbox"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       TOGGLE
+       ===================================================== */
+
+    .stToggle label,
+    .stToggle label span,
+    .stToggle label p {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stToggle"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       RADIO
+       ===================================================== */
+
+    .stRadio label,
+    .stRadio label span,
+    .stRadio label p {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       CAPTIONS
+       ===================================================== */
+
+    .stCaption,
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] * {{
+        color: {muted} !important;
+    }}
+
+    /* =====================================================
+       METRICS
+       ===================================================== */
+
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricLabel"] *,
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricValue"] *,
+    [data-testid="stMetricDelta"],
+    [data-testid="stMetricDelta"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       EXPANDERS
+       ===================================================== */
+
+    [data-testid="stExpander"] {{
+        background-color: {card} !important;
+        border-color: {border} !important;
+    }}
+
+    [data-testid="stExpander"] * {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stExpander"] summary {{
+        color: {text} !important;
+        background-color: {card} !important;
+    }}
+
+    [data-testid="stExpander"] summary span {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       FORMS
+       ===================================================== */
+
+    [data-testid="stForm"] {{
+        background-color: transparent !important;
+    }}
+
+    [data-testid="stForm"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       ALERTS
+       ===================================================== */
+
+    [data-testid="stAlert"] {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stAlert"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       INFO / SUCCESS / ERROR
+       ===================================================== */
+
+    div[data-testid="stAlert"] p,
+    div[data-testid="stAlert"] span {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       CARDS
+       ===================================================== */
+
+    .stat-card {{
+        background: {card} !important;
+        border-radius: 16px;
+        padding: 22px;
+        border: 1px solid {border};
+        box-shadow: 0 4px 15px rgba(0,0,0,0.04);
+    }}
+
+    .stat-number {{
+        font-size: 2rem;
+        font-weight: 800;
+        color: {text} !important;
+    }}
+
+    .stat-label {{
+        color: {muted} !important;
+        font-size: 0.9rem;
+    }}
+
+    /* =====================================================
+       CONTAINERS
+       ===================================================== */
+
+    [data-testid="stVerticalBlockBorderWrapper"] {{
+        border-color: {border} !important;
+        background-color: {card} !important;
+    }}
+
+    [data-testid="stVerticalBlockBorderWrapper"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       MAIN TITLES
+       ===================================================== */
+
+    .main-title {{
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: {text} !important;
+        margin-bottom: 0;
+    }}
+
+    .subtitle {{
+        color: {muted} !important;
+        font-size: 1rem;
+        margin-bottom: 25px;
+    }}
+
+    .section-title {{
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: {text} !important;
+        margin-top: 25px;
+        margin-bottom: 15px;
+    }}
+
+    /* =====================================================
+       WELCOME CARD
+       ===================================================== */
+
+    .welcome {{
+        background: linear-gradient(
+            135deg,
+            #6366f1,
+            #8b5cf6
+        );
+        color: white !important;
+        padding: 28px;
+        border-radius: 20px;
+        margin-bottom: 25px;
+    }}
+
+    .welcome h1,
+    .welcome p {{
+        color: white !important;
+    }}
+
+    .welcome h1 {{
+        margin: 0;
+        font-size: 2rem;
+    }}
+
+    .welcome p {{
+        margin-top: 8px;
+        opacity: 0.9;
+    }}
+
+    /* =====================================================
+       CHAT MESSAGES
+       ===================================================== */
+
+    [data-testid="stChatMessage"] {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stChatMessage"] * {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stChatMessageContent"] {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stChatMessageContent"] * {{
+        color: {text} !important;
+    }}
+
+    /* Chat input */
+    [data-testid="stChatInput"] {{
+        background-color: {input_background} !important;
+    }}
+
+    [data-testid="stChatInput"] textarea {{
+        color: {text} !important;
+        background-color: {input_background} !important;
+    }}
+
+    [data-testid="stChatInput"] textarea::placeholder {{
+        color: {muted} !important;
+    }}
+
+    /* =====================================================
+       MARKDOWN CONTENT
+       ===================================================== */
+
+    .stMarkdown h1,
+    .stMarkdown h2,
+    .stMarkdown h3,
+    .stMarkdown h4,
+    .stMarkdown h5,
+    .stMarkdown h6,
+    .stMarkdown p,
+    .stMarkdown li,
+    .stMarkdown span,
+    .stMarkdown strong {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       DIVIDERS
+       ===================================================== */
+
+    hr {{
+        border-color: {border} !important;
+    }}
+
+    /* =====================================================
+       DATAFRAME / TABLE
+       ===================================================== */
+
+    [data-testid="stDataFrame"] {{
+        color: {text} !important;
+    }}
+
+    [data-testid="stDataFrame"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       POPOVERS
+       ===================================================== */
+
+    [data-testid="stPopover"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       TOOLTIP
+       ===================================================== */
+
+    [role="tooltip"] {{
+        color: {text} !important;
+        background-color: {card} !important;
+    }}
+
+    [role="tooltip"] * {{
+        color: {text} !important;
+    }}
+
+    /* =====================================================
+       LINKS
+       ===================================================== */
+
+    a {{
+        color: {text} !important;
+    }}
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+```
 
 # ============================================================
+
 # SESSION STATE
+
 # ============================================================
 
 if "page" not in st.session_state:
-    st.session_state.page = "Dashboard"
+st.session_state.page = "Dashboard"
 
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = False
-
+st.session_state.dark_mode = False
 
 # ============================================================
+
 # SIDEBAR
+
 # ============================================================
 
 profile = get_profile()
 
 with st.sidebar:
 
-    st.markdown("## 🎓 StudySphere")
+```
+st.markdown("## 🎓 StudySphere")
 
-    st.caption("Learn smarter. Plan better. Achieve more.")
+st.caption("Learn smarter. Plan better. Achieve more.")
 
-    st.divider()
+st.divider()
 
-    pages = [
-        "Dashboard",
-        "Subjects",
-        "Assignments",
-        "Exams",
-        "Study Planner",
-        "AI Tutor",
-        "AI Study Plan",
-        "Profile"
-    ]
+pages = [
+    "Dashboard",
+    "Subjects",
+    "Assignments",
+    "Exams",
+    "Study Planner",
+    "AI Tutor",
+    "AI Study Plan",
+    "Profile"
+]
 
-    for page in pages:
-        if st.button(
-            page,
-            use_container_width=True,
-            key=f"nav_{page}"
-        ):
-            st.session_state.page = page
-            st.rerun()
+for page in pages:
+    if st.button(
+        page,
+        use_container_width=True,
+        key=f"nav_{page}"
+    ):
+        st.session_state.page = page
+        st.rerun()
 
-    st.divider()
+st.divider()
 
-    st.session_state.dark_mode = st.toggle(
-        "🌙 Dark Mode",
-        value=st.session_state.dark_mode
-    )
+st.session_state.dark_mode = st.toggle(
+    "🌙 Dark Mode",
+    value=st.session_state.dark_mode
+)
 
-    st.divider()
+st.divider()
 
-    if profile:
-        st.markdown("### 👤 Student")
-        st.write(profile["name"] or "Student")
+if profile:
+    st.markdown("### 👤 Student")
+    st.write(profile["name"] or "Student")
 
-        if profile["degree"]:
-            st.caption(profile["degree"])
+    if profile["degree"]:
+        st.caption(profile["degree"])
+```
 
+# Apply CSS AFTER sidebar state is set
 
 apply_css(st.session_state.dark_mode)
 
-
 # ============================================================
+
 # DASHBOARD
+
 # ============================================================
 
 def dashboard():
 
-    profile = get_profile()
-    subjects = get_subjects()
-    assignments = get_assignments()
-    exams = get_exams()
-    tasks = get_tasks()
+```
+profile = get_profile()
+subjects = get_subjects()
+assignments = get_assignments()
+exams = get_exams()
+tasks = get_tasks()
 
-    name = profile["name"] if profile else "Student"
+name = profile["name"] if profile else "Student"
 
+st.markdown(
+    f"""
+    <div class="welcome">
+        <h1>Welcome back, {name} 👋</h1>
+        <p>
+            Stay organized, study smarter,
+            and keep moving toward your goals.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+pending_assignments = len([
+    a for a in assignments
+    if a["status"] != "Completed"
+])
+
+completed_tasks = len([
+    t for t in tasks
+    if t["completed"]
+])
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
     st.markdown(
         f"""
-        <div class="welcome">
-            <h1>Welcome back, {name} 👋</h1>
-            <p>
-                Stay organized, study smarter,
-                and keep moving toward your goals.
-            </p>
+        <div class="stat-card">
+            <div class="stat-number">{len(subjects)}</div>
+            <div class="stat-label">Subjects</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    total_assignments = len(assignments)
-
-    pending_assignments = len([
-        a for a in assignments
-        if a["status"] != "Completed"
-    ])
-
-    completed_tasks = len([
-        t for t in tasks
-        if t["completed"]
-    ])
-
-    pending_tasks = len([
-        t for t in tasks
-        if not t["completed"]
-    ])
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.markdown(
-            f"""
-            <div class="stat-card">
-                <div class="stat-number">{len(subjects)}</div>
-                <div class="stat-label">Subjects</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col2:
-        st.markdown(
-            f"""
-            <div class="stat-card">
-                <div class="stat-number">{pending_assignments}</div>
-                <div class="stat-label">Pending Assignments</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col3:
-        st.markdown(
-            f"""
-            <div class="stat-card">
-                <div class="stat-number">{len(exams)}</div>
-                <div class="stat-label">Upcoming Exams</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col4:
-        st.markdown(
-            f"""
-            <div class="stat-card">
-                <div class="stat-number">{completed_tasks}</div>
-                <div class="stat-label">Completed Tasks</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
+with col2:
     st.markdown(
-        '<div class="section-title">📚 Today\'s Tasks</div>',
+        f"""
+        <div class="stat-card">
+            <div class="stat-number">{pending_assignments}</div>
+            <div class="stat-label">Pending Assignments</div>
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-    today = date.today().isoformat()
-
-    today_tasks = [
-        t for t in tasks
-        if t["task_date"] == today
-    ]
-
-    if not today_tasks:
-        st.info("No tasks scheduled for today.")
-
-    for task in today_tasks:
-
-        completed = bool(task["completed"])
-
-        new_value = st.checkbox(
-            f"{'~~' if completed else ''}"
-            f"{task['title']} "
-            f"({task['duration'] or 0} min)"
-            f"{'~~' if completed else ''}",
-            value=completed,
-            key=f"dashboard_task_{task['id']}"
-        )
-
-        if new_value != completed:
-            update_task(task["id"], new_value)
-            st.rerun()
-
+with col3:
     st.markdown(
-        '<div class="section-title">📝 Upcoming Assignments</div>',
+        f"""
+        <div class="stat-card">
+            <div class="stat-number">{len(exams)}</div>
+            <div class="stat-label">Upcoming Exams</div>
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-    upcoming_assignments = [
-        a for a in assignments
-        if a["status"] != "Completed"
-    ][:5]
-
-    if not upcoming_assignments:
-        st.success("No pending assignments! 🎉")
-
-    for assignment in upcoming_assignments:
-
-        st.write(
-            f"**{assignment['title']}** — "
-            f"{assignment['deadline']} "
-            f"({assignment['priority']})"
-        )
-
+with col4:
     st.markdown(
-        '<div class="section-title">📅 Upcoming Exams</div>',
+        f"""
+        <div class="stat-card">
+            <div class="stat-number">{completed_tasks}</div>
+            <div class="stat-label">Completed Tasks</div>
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-    upcoming_exams = exams[:5]
+st.markdown(
+    '<div class="section-title">📚 Today\'s Tasks</div>',
+    unsafe_allow_html=True
+)
 
-    if not upcoming_exams:
-        st.info("No exams added yet.")
+today = date.today().isoformat()
 
-    for exam in upcoming_exams:
+today_tasks = [
+    t for t in tasks
+    if t["task_date"] == today
+]
 
-        subject = exam["subject_name"] or "No subject"
+if not today_tasks:
+    st.info("No tasks scheduled for today.")
 
-        st.write(
-            f"**{exam['title']}** — "
-            f"{subject} — {exam['exam_date']}"
-        )
+for task in today_tasks:
 
+    completed = bool(task["completed"])
+
+    new_value = st.checkbox(
+        f"{task['title']} ({task['duration'] or 0} min)",
+        value=completed,
+        key=f"dashboard_task_{task['id']}"
+    )
+
+    if new_value != completed:
+        update_task(task["id"], new_value)
+        st.rerun()
+
+st.markdown(
+    '<div class="section-title">📝 Upcoming Assignments</div>',
+    unsafe_allow_html=True
+)
+
+upcoming_assignments = [
+    a for a in assignments
+    if a["status"] != "Completed"
+][:5]
+
+if not upcoming_assignments:
+    st.success("No pending assignments! 🎉")
+
+for assignment in upcoming_assignments:
+
+    st.write(
+        f"**{assignment['title']}** — "
+        f"{assignment['deadline']} "
+        f"({assignment['priority']})"
+    )
+
+st.markdown(
+    '<div class="section-title">📅 Upcoming Exams</div>',
+    unsafe_allow_html=True
+)
+
+upcoming_exams = exams[:5]
+
+if not upcoming_exams:
+    st.info("No exams added yet.")
+
+for exam in upcoming_exams:
+
+    subject = exam["subject_name"] or "No subject"
+
+    st.write(
+        f"**{exam['title']}** — "
+        f"{subject} — {exam['exam_date']}"
+    )
+```
 
 # ============================================================
+
 # SUBJECTS
+
 # ============================================================
 
 def subjects_page():
 
-    st.title("📚 Subjects")
+```
+st.title("📚 Subjects")
 
-    subjects = get_subjects()
+subjects = get_subjects()
 
-    with st.expander("➕ Add New Subject"):
+with st.expander("➕ Add New Subject"):
 
-        with st.form("subject_form"):
+    with st.form("subject_form"):
 
-            name = st.text_input("Subject Name")
-            code = st.text_input("Course Code")
-            instructor = st.text_input("Instructor")
-            description = st.text_area("Description")
+        name = st.text_input("Subject Name")
+        code = st.text_input("Course Code")
+        instructor = st.text_input("Instructor")
+        description = st.text_area("Description")
 
-            submitted = st.form_submit_button(
-                "Add Subject",
-                use_container_width=True
-            )
+        submitted = st.form_submit_button(
+            "Add Subject",
+            use_container_width=True
+        )
 
-            if submitted:
+        if submitted:
 
-                if not name.strip():
-                    st.error("Subject name is required.")
-                else:
-                    add_subject(
-                        name,
-                        code,
-                        instructor,
-                        description
-                    )
-                    st.success("Subject added successfully!")
-                    st.rerun()
+            if not name.strip():
+                st.error("Subject name is required.")
+            else:
+                add_subject(
+                    name,
+                    code,
+                    instructor,
+                    description
+                )
+                st.success("Subject added successfully!")
+                st.rerun()
 
-    st.divider()
+st.divider()
 
-    if not subjects:
-        st.info("No subjects added yet.")
-        return
+if not subjects:
+    st.info("No subjects added yet.")
+    return
 
-    for subject in subjects:
+for subject in subjects:
 
-        with st.container(border=True):
+    with st.container(border=True):
 
-            col1, col2 = st.columns([5, 1])
+        col1, col2 = st.columns([5, 1])
 
-            with col1:
-                st.subheader(subject["name"])
+        with col1:
 
-                if subject["code"]:
-                    st.caption(f"Course Code: {subject['code']}")
+            st.subheader(subject["name"])
 
-                if subject["instructor"]:
-                    st.write(
-                        f"👨‍🏫 {subject['instructor']}"
-                    )
+            if subject["code"]:
+                st.caption(
+                    f"Course Code: {subject['code']}"
+                )
 
-                if subject["description"]:
-                    st.write(subject["description"])
+            if subject["instructor"]:
+                st.write(
+                    f"👨‍🏫 {subject['instructor']}"
+                )
 
-            with col2:
+            if subject["description"]:
+                st.write(subject["description"])
 
-                if st.button(
-                    "Delete",
-                    key=f"delete_subject_{subject['id']}"
-                ):
-                    delete_subject(subject["id"])
-                    st.rerun()
+        with col2:
 
+            if st.button(
+                "Delete",
+                key=f"delete_subject_{subject['id']}"
+            ):
+                delete_subject(subject["id"])
+                st.rerun()
+```
 
 # ============================================================
+
 # ASSIGNMENTS
+
 # ============================================================
 
 def assignments_page():
 
-    st.title("📝 Assignment Manager")
+```
+st.title("📝 Assignment Manager")
 
-    subjects = get_subjects()
+subjects = get_subjects()
 
-    subject_options = {
-        "No Subject": None
-    }
+subject_options = {
+    "No Subject": None
+}
 
-    for subject in subjects:
-        subject_options[
-            subject["name"]
-        ] = subject["id"]
+for subject in subjects:
+    subject_options[subject["name"]] = subject["id"]
 
-    with st.expander("➕ Add Assignment"):
+with st.expander("➕ Add Assignment"):
 
-        with st.form("assignment_form"):
+    with st.form("assignment_form"):
 
-            title = st.text_input("Assignment Title")
+        title = st.text_input("Assignment Title")
 
-            description = st.text_area(
-                "Description"
-            )
+        description = st.text_area(
+            "Description"
+        )
 
-            deadline = st.date_input(
-                "Deadline",
-                value=date.today()
-            )
+        deadline = st.date_input(
+            "Deadline",
+            value=date.today()
+        )
 
-            priority = st.selectbox(
-                "Priority",
-                ["Low", "Medium", "High"]
-            )
+        priority = st.selectbox(
+            "Priority",
+            ["Low", "Medium", "High"]
+        )
 
-            selected_subject = st.selectbox(
-                "Subject",
-                list(subject_options.keys())
-            )
+        selected_subject = st.selectbox(
+            "Subject",
+            list(subject_options.keys())
+        )
 
-            submitted = st.form_submit_button(
-                "Add Assignment",
-                use_container_width=True
-            )
+        submitted = st.form_submit_button(
+            "Add Assignment",
+            use_container_width=True
+        )
 
-            if submitted:
+        if submitted:
 
-                if not title.strip():
-                    st.error("Assignment title is required.")
-                else:
+            if not title.strip():
+                st.error("Assignment title is required.")
+            else:
 
-                    add_assignment(
-                        title,
-                        description,
-                        deadline.isoformat(),
-                        priority,
-                        subject_options[selected_subject]
-                    )
-
-                    st.success("Assignment added!")
-                    st.rerun()
-
-    st.divider()
-
-    assignments = get_assignments()
-
-    if not assignments:
-        st.info("No assignments yet.")
-        return
-
-    for assignment in assignments:
-
-        with st.container(border=True):
-
-            col1, col2, col3 = st.columns(
-                [4, 2, 1]
-            )
-
-            with col1:
-
-                st.subheader(
-                    assignment["title"]
+                add_assignment(
+                    title,
+                    description,
+                    deadline.isoformat(),
+                    priority,
+                    subject_options[selected_subject]
                 )
 
-                if assignment["description"]:
-                    st.write(
-                        assignment["description"]
-                    )
+                st.success("Assignment added!")
+                st.rerun()
 
-                st.caption(
-                    f"Subject: "
-                    f"{assignment['subject_name'] or 'None'}"
-                )
+st.divider()
 
-            with col2:
+assignments = get_assignments()
 
+if not assignments:
+    st.info("No assignments yet.")
+    return
+
+for assignment in assignments:
+
+    with st.container(border=True):
+
+        col1, col2, col3 = st.columns(
+            [4, 2, 1]
+        )
+
+        with col1:
+
+            st.subheader(
+                assignment["title"]
+            )
+
+            if assignment["description"]:
                 st.write(
-                    f"📅 {assignment['deadline']}"
+                    assignment["description"]
                 )
 
-                st.write(
-                    f"Priority: "
-                    f"**{assignment['priority']}**"
+            st.caption(
+                f"Subject: "
+                f"{assignment['subject_name'] or 'None'}"
+            )
+
+        with col2:
+
+            st.write(
+                f"📅 {assignment['deadline']}"
+            )
+
+            st.write(
+                f"Priority: "
+                f"**{assignment['priority']}**"
+            )
+
+            new_status = st.selectbox(
+                "Status",
+                [
+                    "Pending",
+                    "In Progress",
+                    "Completed"
+                ],
+                index=[
+                    "Pending",
+                    "In Progress",
+                    "Completed"
+                ].index(assignment["status"]),
+                key=f"status_{assignment['id']}"
+            )
+
+            if new_status != assignment["status"]:
+                update_assignment_status(
+                    assignment["id"],
+                    new_status
                 )
+                st.rerun()
 
-                new_status = st.selectbox(
-                    "Status",
-                    [
-                        "Pending",
-                        "In Progress",
-                        "Completed"
-                    ],
-                    index=[
-                        "Pending",
-                        "In Progress",
-                        "Completed"
-                    ].index(assignment["status"]),
-                    key=f"status_{assignment['id']}"
+        with col3:
+
+            if st.button(
+                "🗑️",
+                key=f"delete_assignment_{assignment['id']}"
+            ):
+                delete_assignment(
+                    assignment["id"]
                 )
-
-                if new_status != assignment["status"]:
-                    update_assignment_status(
-                        assignment["id"],
-                        new_status
-                    )
-                    st.rerun()
-
-            with col3:
-
-                if st.button(
-                    "🗑️",
-                    key=f"delete_assignment_{assignment['id']}"
-                ):
-                    delete_assignment(
-                        assignment["id"]
-                    )
-                    st.rerun()
-
+                st.rerun()
+```
 
 # ============================================================
+
 # EXAMS
+
 # ============================================================
 
 def exams_page():
 
-    st.title("📅 Exam Manager")
+```
+st.title("📅 Exam Manager")
 
-    subjects = get_subjects()
+subjects = get_subjects()
 
-    subject_options = {
-        "No Subject": None
-    }
+subject_options = {
+    "No Subject": None
+}
 
-    for subject in subjects:
-        subject_options[
-            subject["name"]
-        ] = subject["id"]
+for subject in subjects:
+    subject_options[subject["name"]] = subject["id"]
 
-    with st.expander("➕ Add Exam"):
+with st.expander("➕ Add Exam"):
 
-        with st.form("exam_form"):
+    with st.form("exam_form"):
 
-            title = st.text_input("Exam Title")
+        title = st.text_input("Exam Title")
 
-            exam_date = st.date_input(
-                "Exam Date",
-                value=date.today()
+        exam_date = st.date_input(
+            "Exam Date",
+            value=date.today()
+        )
+
+        selected_subject = st.selectbox(
+            "Subject",
+            list(subject_options.keys())
+        )
+
+        syllabus = st.text_area(
+            "Syllabus / Topics"
+        )
+
+        notes = st.text_area(
+            "Notes"
+        )
+
+        submitted = st.form_submit_button(
+            "Add Exam",
+            use_container_width=True
+        )
+
+        if submitted:
+
+            if not title.strip():
+                st.error("Exam title is required.")
+            else:
+
+                add_exam(
+                    title,
+                    exam_date.isoformat(),
+                    syllabus,
+                    notes,
+                    subject_options[selected_subject]
+                )
+
+                st.success("Exam added!")
+                st.rerun()
+
+st.divider()
+
+exams = get_exams()
+
+if not exams:
+    st.info("No exams added yet.")
+    return
+
+for exam in exams:
+
+    with st.container(border=True):
+
+        col1, col2 = st.columns([4, 2])
+
+        with col1:
+
+            st.subheader(exam["title"])
+
+            st.write(
+                f"📚 "
+                f"{exam['subject_name'] or 'No subject'}"
             )
 
-            selected_subject = st.selectbox(
-                "Subject",
-                list(subject_options.keys())
-            )
-
-            syllabus = st.text_area(
-                "Syllabus / Topics"
-            )
-
-            notes = st.text_area(
-                "Notes"
-            )
-
-            submitted = st.form_submit_button(
-                "Add Exam",
-                use_container_width=True
-            )
-
-            if submitted:
-
-                if not title.strip():
-                    st.error("Exam title is required.")
-                else:
-
-                    add_exam(
-                        title,
-                        exam_date.isoformat(),
-                        syllabus,
-                        notes,
-                        subject_options[selected_subject]
-                    )
-
-                    st.success("Exam added!")
-                    st.rerun()
-
-    st.divider()
-
-    exams = get_exams()
-
-    if not exams:
-        st.info("No exams added yet.")
-        return
-
-    for exam in exams:
-
-        with st.container(border=True):
-
-            col1, col2 = st.columns([4, 2])
-
-            with col1:
-
-                st.subheader(exam["title"])
-
+            if exam["syllabus"]:
                 st.write(
-                    f"📚 "
-                    f"{exam['subject_name'] or 'No subject'}"
+                    f"**Syllabus:** "
+                    f"{exam['syllabus']}"
                 )
 
-                if exam["syllabus"]:
-                    st.write(
-                        f"**Syllabus:** "
-                        f"{exam['syllabus']}"
-                    )
-
-                if exam["notes"]:
-                    st.write(
-                        f"**Notes:** {exam['notes']}"
-                    )
-
-            with col2:
-
-                st.metric(
-                    "Exam Date",
-                    exam["exam_date"]
+            if exam["notes"]:
+                st.write(
+                    f"**Notes:** {exam['notes']}"
                 )
 
-                if st.button(
-                    "Delete",
-                    key=f"delete_exam_{exam['id']}"
-                ):
-                    delete_exam(exam["id"])
-                    st.rerun()
+        with col2:
 
+            st.metric(
+                "Exam Date",
+                exam["exam_date"]
+            )
+
+            if st.button(
+                "Delete",
+                key=f"delete_exam_{exam['id']}"
+            ):
+                delete_exam(exam["id"])
+                st.rerun()
+```
 
 # ============================================================
+
 # STUDY PLANNER
+
 # ============================================================
 
 def planner_page():
 
-    st.title("✅ Study Planner")
+```
+st.title("✅ Study Planner")
 
-    subjects = get_subjects()
+subjects = get_subjects()
 
-    subject_options = {
-        "No Subject": None
-    }
+subject_options = {
+    "No Subject": None
+}
 
-    for subject in subjects:
-        subject_options[
-            subject["name"]
-        ] = subject["id"]
+for subject in subjects:
+    subject_options[subject["name"]] = subject["id"]
 
-    with st.expander("➕ Add Study Task"):
+with st.expander("➕ Add Study Task"):
 
-        with st.form("task_form"):
+    with st.form("task_form"):
 
-            title = st.text_input(
-                "Task Title"
-            )
+        title = st.text_input(
+            "Task Title"
+        )
 
-            task_date = st.date_input(
-                "Date",
-                value=date.today()
-            )
+        task_date = st.date_input(
+            "Date",
+            value=date.today()
+        )
 
-            duration = st.number_input(
-                "Duration (minutes)",
-                min_value=5,
-                max_value=600,
-                value=60,
-                step=5
-            )
+        duration = st.number_input(
+            "Duration (minutes)",
+            min_value=5,
+            max_value=600,
+            value=60,
+            step=5
+        )
 
-            priority = st.selectbox(
-                "Priority",
-                ["Low", "Medium", "High"]
-            )
+        priority = st.selectbox(
+            "Priority",
+            ["Low", "Medium", "High"]
+        )
 
-            selected_subject = st.selectbox(
-                "Subject",
-                list(subject_options.keys())
-            )
+        selected_subject = st.selectbox(
+            "Subject",
+            list(subject_options.keys())
+        )
 
-            submitted = st.form_submit_button(
-                "Add Task",
-                use_container_width=True
-            )
+        submitted = st.form_submit_button(
+            "Add Task",
+            use_container_width=True
+        )
 
-            if submitted:
+        if submitted:
 
-                if not title.strip():
-                    st.error("Task title is required.")
-                else:
+            if not title.strip():
+                st.error("Task title is required.")
+            else:
 
-                    add_task(
-                        title,
-                        task_date.isoformat(),
-                        duration,
-                        priority,
-                        subject_options[selected_subject]
-                    )
-
-                    st.success("Task added!")
-                    st.rerun()
-
-    st.divider()
-
-    tasks = get_tasks()
-
-    if not tasks:
-        st.info("No study tasks yet.")
-        return
-
-    for task in tasks:
-
-        completed = bool(task["completed"])
-
-        with st.container(border=True):
-
-            col1, col2, col3 = st.columns(
-                [5, 2, 1]
-            )
-
-            with col1:
-
-                new_completed = st.checkbox(
-                    task["title"],
-                    value=completed,
-                    key=f"task_{task['id']}"
+                add_task(
+                    title,
+                    task_date.isoformat(),
+                    duration,
+                    priority,
+                    subject_options[selected_subject]
                 )
 
-                if new_completed != completed:
-                    update_task(
-                        task["id"],
-                        new_completed
-                    )
-                    st.rerun()
+                st.success("Task added!")
+                st.rerun()
 
-                st.caption(
-                    f"📚 "
-                    f"{task['subject_name'] or 'No subject'}"
+st.divider()
+
+tasks = get_tasks()
+
+if not tasks:
+    st.info("No study tasks yet.")
+    return
+
+for task in tasks:
+
+    completed = bool(task["completed"])
+
+    with st.container(border=True):
+
+        col1, col2, col3 = st.columns(
+            [5, 2, 1]
+        )
+
+        with col1:
+
+            new_completed = st.checkbox(
+                task["title"],
+                value=completed,
+                key=f"task_{task['id']}"
+            )
+
+            if new_completed != completed:
+                update_task(
+                    task["id"],
+                    new_completed
                 )
+                st.rerun()
 
-            with col2:
+            st.caption(
+                f"📚 "
+                f"{task['subject_name'] or 'No subject'}"
+            )
 
-                st.write(
-                    f"📅 {task['task_date']}"
-                )
+        with col2:
 
-                st.write(
-                    f"⏱️ {task['duration'] or 0} min"
-                )
+            st.write(
+                f"📅 {task['task_date']}"
+            )
 
-                st.write(
-                    f"Priority: {task['priority']}"
-                )
+            st.write(
+                f"⏱️ {task['duration'] or 0} min"
+            )
 
-            with col3:
+            st.write(
+                f"Priority: {task['priority']}"
+            )
 
-                if st.button(
-                    "🗑️",
-                    key=f"delete_task_{task['id']}"
-                ):
-                    delete_task(task["id"])
-                    st.rerun()
+        with col3:
 
+            if st.button(
+                "🗑️",
+                key=f"delete_task_{task['id']}"
+            ):
+                delete_task(task["id"])
+                st.rerun()
+```
 
 # ============================================================
+
 # AI TUTOR
+
 # ============================================================
 
 def ai_tutor_page():
 
-    st.title("🤖 AI Tutor")
+```
+st.title("🤖 AI Tutor")
 
-    st.write(
-        "Ask StudySphere anything about your studies."
-    )
+st.write(
+    "Ask StudySphere anything about your studies."
+)
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-    for message in st.session_state.chat_history:
+for message in st.session_state.chat_history:
 
-        with st.chat_message(
-            message["role"]
-        ):
-            st.markdown(
-                message["content"]
-            )
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    prompt = st.chat_input(
-        "Ask your AI Tutor..."
-    )
+prompt = st.chat_input(
+    "Ask your AI Tutor..."
+)
 
-    if prompt:
+if prompt:
 
-        st.session_state.chat_history.append({
-            "role": "user",
-            "content": prompt
-        })
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": prompt
+    })
 
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        system_prompt = """
+    system_prompt = """
+```
+
 You are StudySphere AI Tutor.
 
 Your job is to help university students learn.
 
 Rules:
-- Explain concepts clearly.
-- Use beginner-friendly language.
-- Give examples.
-- Break difficult concepts into steps.
-- Help students understand rather than blindly providing answers.
-- For programming questions, explain the logic.
-- Use headings and bullet points when useful.
-"""
 
-        full_prompt = (
-            system_prompt
-            + "\n\nStudent question:\n"
-            + prompt
-        )
+* Explain concepts clearly.
+* Use beginner-friendly language.
+* Give examples.
+* Break difficult concepts into steps.
+* Help students understand rather than blindly providing answers.
+* For programming questions, explain the logic.
+* Use headings and bullet points when useful.
+  """
 
-        response = ask_gemini(
-            full_prompt
-        )
+  ```
+    full_prompt = (
+        system_prompt
+        + "\n\nStudent question:\n"
+        + prompt
+    )
 
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": response
-        })
+    response = ask_gemini(
+        full_prompt
+    )
 
-        with st.chat_message("assistant"):
-            st.markdown(response)
+    st.session_state.chat_history.append({
+        "role": "assistant",
+        "content": response
+    })
 
+    with st.chat_message("assistant"):
+        st.markdown(response)
+  ```
 
 # ============================================================
+
 # AI STUDY PLAN
+
 # ============================================================
 
 def ai_study_plan_page():
 
-    st.title("🧠 AI Study Plan Generator")
+```
+st.title("🧠 AI Study Plan Generator")
 
-    st.write(
-        "Create a personalized study plan using your academic workload."
+st.write(
+    "Create a personalized study plan using your academic workload."
+)
+
+subjects = get_subjects()
+assignments = get_assignments()
+exams = get_exams()
+
+with st.form("study_plan_form"):
+
+    available_hours = st.number_input(
+        "Available study hours per day",
+        min_value=1,
+        max_value=16,
+        value=3
     )
 
-    subjects = get_subjects()
-    assignments = get_assignments()
-    exams = get_exams()
+    plan_days = st.number_input(
+        "Plan duration (days)",
+        min_value=1,
+        max_value=30,
+        value=7
+    )
 
-    with st.form("study_plan_form"):
-
-        available_hours = st.number_input(
-            "Available study hours per day",
-            min_value=1,
-            max_value=16,
-            value=3
+    priorities = st.text_area(
+        "What do you want to focus on?",
+        placeholder=(
+            "Example: C++, Database, AI exam preparation"
         )
+    )
 
-        plan_days = st.number_input(
-            "Plan duration (days)",
-            min_value=1,
-            max_value=30,
-            value=7
-        )
+    submitted = st.form_submit_button(
+        "✨ Generate Study Plan",
+        use_container_width=True
+    )
 
-        priorities = st.text_area(
-            "What do you want to focus on?",
-            placeholder=(
-                "Example: C++, Database, AI exam preparation"
-            )
-        )
+if submitted:
 
-        submitted = st.form_submit_button(
-            "✨ Generate Study Plan",
-            use_container_width=True
-        )
+    subject_text = "\n".join([
+        f"- {s['name']}"
+        for s in subjects
+    ])
 
-    if submitted:
+    assignment_text = "\n".join([
+        f"- {a['title']} | "
+        f"Deadline: {a['deadline']} | "
+        f"Priority: {a['priority']}"
+        for a in assignments
+        if a["status"] != "Completed"
+    ])
 
-        subject_text = "\n".join([
-            f"- {s['name']}"
-            for s in subjects
-        ])
+    exam_text = "\n".join([
+        f"- {e['title']} | "
+        f"Date: {e['exam_date']} | "
+        f"Subject: {e['subject_name'] or 'Unknown'}"
+        for e in exams
+    ])
 
-        assignment_text = "\n".join([
-            f"- {a['title']} | "
-            f"Deadline: {a['deadline']} | "
-            f"Priority: {a['priority']}"
-            for a in assignments
-            if a["status"] != "Completed"
-        ])
+    prompt = f"""
+```
 
-        exam_text = "\n".join([
-            f"- {e['title']} | "
-            f"Date: {e['exam_date']} | "
-            f"Subject: {e['subject_name'] or 'Unknown'}"
-            for e in exams
-        ])
-
-        prompt = f"""
 You are StudySphere AI Study Planner.
 
 Create a practical personalized study plan.
@@ -1370,140 +1809,147 @@ Student priorities:
 Create a day-by-day study plan.
 
 For every day include:
-- Subject
-- Topic/activity
-- Duration
-- Priority
-- Revision/review activity
+
+* Subject
+* Topic/activity
+* Duration
+* Priority
+* Revision/review activity
 
 Make the plan realistic and avoid overloading the student.
 """
 
-        with st.spinner(
-            "Creating your personalized study plan..."
-        ):
+```
+    with st.spinner(
+        "Creating your personalized study plan..."
+    ):
 
-            response = ask_gemini(prompt)
+        response = ask_gemini(prompt)
 
-        st.success(
-            "Your study plan is ready!"
-        )
+    st.success(
+        "Your study plan is ready!"
+    )
 
-        st.markdown(response)
+    st.markdown(response)
 
-        execute_query("""
-            INSERT INTO study_plans
-            (title,content,created_at)
-            VALUES (?,?,?)
-        """, (
-            f"{plan_days}-Day Study Plan",
-            response,
-            datetime.now().isoformat()
-        ))
-
+    execute_query("""
+        INSERT INTO study_plans
+        (title,content,created_at)
+        VALUES (?,?,?)
+    """, (
+        f"{plan_days}-Day Study Plan",
+        response,
+        datetime.now().isoformat()
+    ))
+```
 
 # ============================================================
+
 # PROFILE
+
 # ============================================================
 
 def profile_page():
 
-    st.title("👤 Student Profile")
+```
+st.title("👤 Student Profile")
 
-    profile = get_profile()
+profile = get_profile()
 
-    with st.form("profile_form"):
+with st.form("profile_form"):
 
-        name = st.text_input(
-            "Full Name",
-            value=profile["name"] if profile else ""
-        )
+    name = st.text_input(
+        "Full Name",
+        value=profile["name"] if profile else ""
+    )
 
-        email = st.text_input(
-            "Email",
-            value=profile["email"] if profile else ""
-        )
+    email = st.text_input(
+        "Email",
+        value=profile["email"] if profile else ""
+    )
 
-        university = st.text_input(
-            "University / College",
-            value=profile["university"] if profile else ""
-        )
+    university = st.text_input(
+        "University / College",
+        value=profile["university"] if profile else ""
+    )
 
-        degree = st.text_input(
-            "Degree / Program",
-            value=profile["degree"] if profile else ""
-        )
+    degree = st.text_input(
+        "Degree / Program",
+        value=profile["degree"] if profile else ""
+    )
 
-        semester = st.text_input(
-            "Semester",
-            value=profile["semester"] if profile else ""
-        )
+    semester = st.text_input(
+        "Semester",
+        value=profile["semester"] if profile else ""
+    )
 
-        target_gpa = st.number_input(
-            "Target GPA",
-            min_value=0.0,
-            max_value=4.0,
-            value=float(
-                profile["target_gpa"]
-                if profile and profile["target_gpa"]
-                else 3.5
-            ),
-            step=0.1
-        )
+    target_gpa = st.number_input(
+        "Target GPA",
+        min_value=0.0,
+        max_value=4.0,
+        value=float(
+            profile["target_gpa"]
+            if profile and profile["target_gpa"]
+            else 3.5
+        ),
+        step=0.1
+    )
 
-        submitted = st.form_submit_button(
-            "Save Profile",
-            use_container_width=True
-        )
+    submitted = st.form_submit_button(
+        "Save Profile",
+        use_container_width=True
+    )
 
-        if submitted:
+    if submitted:
 
-            if not name.strip():
-                st.error("Please enter your name.")
-            else:
+        if not name.strip():
+            st.error("Please enter your name.")
+        else:
 
-                save_profile(
-                    name,
-                    email,
-                    university,
-                    degree,
-                    semester,
-                    target_gpa
-                )
+            save_profile(
+                name,
+                email,
+                university,
+                degree,
+                semester,
+                target_gpa
+            )
 
-                st.success(
-                    "Profile saved successfully!"
-                )
+            st.success(
+                "Profile saved successfully!"
+            )
 
-                st.rerun()
-
+            st.rerun()
+```
 
 # ============================================================
+
 # ROUTING
+
 # ============================================================
 
 page = st.session_state.page
 
 if page == "Dashboard":
-    dashboard()
+dashboard()
 
 elif page == "Subjects":
-    subjects_page()
+subjects_page()
 
 elif page == "Assignments":
-    assignments_page()
+assignments_page()
 
 elif page == "Exams":
-    exams_page()
+exams_page()
 
 elif page == "Study Planner":
-    planner_page()
+planner_page()
 
 elif page == "AI Tutor":
-    ai_tutor_page()
+ai_tutor_page()
 
 elif page == "AI Study Plan":
-    ai_study_plan_page()
+ai_study_plan_page()
 
 elif page == "Profile":
-    profile_page()
+profile_page()
