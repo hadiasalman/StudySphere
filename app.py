@@ -1,4 +1,7 @@
 import hashlib
+import json
+import urllib.error
+import urllib.request
 import hmac
 import re
 import secrets
@@ -36,6 +39,12 @@ if "display_name" not in st.session_state:
 
 if "email" not in st.session_state:
     st.session_state.email = ""
+
+if "ai_api_key" not in st.session_state:
+    st.session_state.ai_api_key = ""
+
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = []
 
 if "signup_recovery_code" not in st.session_state:
     st.session_state.signup_recovery_code = ""
@@ -258,6 +267,74 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.email = clean_email(email)
     st.session_state.page = 1
     st.session_state.show_login = "Sign in"
+
+
+def call_groq_agent(api_key, messages, model="openai/gpt-oss-20b"):
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return "Please enter your Groq API key in the AI Agent page before using the agent."
+    payload = {"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 1800}
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+        choices = data.get("choices") or []
+        if not choices:
+            return "The AI service returned an empty response. Please try again."
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+        content = str(content or "").strip()
+        return content or "The AI service returned an empty response. Please try again."
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8")
+            parsed = json.loads(detail)
+            message = parsed.get("error", {}).get("message", "AI request failed.")
+        except Exception:
+            message = "AI request failed."
+        return f"AI service error: {message}"
+    except urllib.error.URLError:
+        return "Could not reach the AI service. Check your internet connection and try again."
+    except Exception:
+        return "Something went wrong while contacting the AI service. Please try again."
+
+
+def build_agent_context(auth_id):
+    subjects = cursor.execute(
+        "SELECT name, code, instructor FROM subjects WHERE user_id = ? ORDER BY name",
+        (auth_id,),
+    ).fetchall()
+    assignments = cursor.execute(
+        "SELECT title, deadline, priority, status, description FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 12",
+        (auth_id,),
+    ).fetchall()
+    exams = cursor.execute(
+        "SELECT title, exam_date, syllabus, notes FROM exams WHERE user_id = ? AND exam_date >= ? ORDER BY exam_date LIMIT 12",
+        (auth_id, str(date.today())),
+    ).fetchall()
+    tasks = cursor.execute(
+        "SELECT title, task_date, duration, priority, completed FROM tasks WHERE user_id = ? ORDER BY task_date LIMIT 20",
+        (auth_id,),
+    ).fetchall()
+    return {
+        "today": str(date.today()),
+        "subjects": subjects,
+        "assignments": assignments,
+        "upcoming_exams": exams,
+        "study_tasks": tasks,
+    }
+
+
+def format_agent_context(context):
+    return json.dumps(context, ensure_ascii=False, indent=2, default=str)
 
 
 def clear_authenticated_user():
@@ -495,6 +572,7 @@ nav_options = [
     (4, "📅  Exams"),
     (5, "✅  Study Planner"),
     (6, "👤  Profile"),
+    (7, "🤖  AI Agent"),
 ]
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
@@ -503,7 +581,7 @@ st.session_state.page = dict((label, page_id) for page_id, label in nav_options)
 st.sidebar.markdown("---")
 st.sidebar.markdown('<div class="sidebar-label">Intelligence</div>', unsafe_allow_html=True)
 st.sidebar.markdown("### 🤖 AI Agent")
-st.sidebar.caption("Your academic AI agent is the next major StudySphere module.")
+st.sidebar.caption("Context-aware academic help powered by an AI model.")
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
 if dark_mode_toggle != st.session_state.dark_mode:
@@ -802,6 +880,53 @@ elif st.session_state.page == 6:
             st.code(recovery_code)
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Account security</div><div class="ai-title">🛡️ Your login is built directly into StudySphere</div><div class="ai-text">StudySphere keeps authentication and academic records in the local SQLite database. Passwords are never stored as plain text.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 7:
+    st.markdown('<div class="page-banner"><div class="page-title">🤖 AI Agent</div><div class="page-sub">Ask questions, analyze your academic workload, and turn your stored study data into a focused action plan.</div></div>', unsafe_allow_html=True)
+
+    agent_left, agent_right = st.columns([1.35, 1])
+    with agent_left:
+        st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your API key is kept only in this browser session and is never written to the SQLite database.</div></div>', unsafe_allow_html=True)
+        agent_key = st.text_input("Groq API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
+        st.session_state.ai_api_key = agent_key.strip()
+        st.caption("StudySphere uses Groq's OpenAI-compatible chat endpoint with the current openai/gpt-oss-20b model.")
+
+    with agent_right:
+        context = build_agent_context(AUTH_ID)
+        st.metric("Subjects in context", len(context["subjects"]))
+        st.metric("Upcoming exams", len(context["upcoming_exams"]))
+        st.metric("Active assignments", sum(1 for row in context["assignments"] if str(row[3]).lower() != "completed"))
+
+    agent_mode = st.selectbox("Agent mode", ["Ask my AI Tutor", "Analyze my academics", "Build my focus plan"])
+    agent_question = st.text_area("What should the agent work on?", placeholder="Example: I have a database exam soon. What should I study first?", height=120)
+
+    run_agent = st.button("🚀 Run AI Agent", use_container_width=True)
+    if run_agent:
+        agent_context_text = format_agent_context(context)
+        base_system = """You are StudySphere AI Agent, an academic assistant for a university student. Use the student's stored StudySphere data as the primary context. Do not invent deadlines, exams, subjects, or scores. Be practical and concise. Explain educational concepts clearly instead of blindly giving answers. When prioritizing, consider exam dates, assignment deadlines, unfinished study tasks, and stated priorities. If the data is insufficient, say exactly what is missing."""
+
+        if agent_mode == "Ask my AI Tutor":
+            user_prompt = "Answer the student's question using the StudySphere context below. Give a simple explanation first, then examples or steps where useful.\n\nStudent question:\n" + (agent_question.strip() or "Give me one useful academic recommendation based on my current data.") + "\n\nStudySphere context:\n" + agent_context_text
+        elif agent_mode == "Analyze my academics":
+            user_prompt = "Analyze the student's current academic workload from the context below. Identify the most time-sensitive items, possible overloads or gaps, and 3 concrete actions for the next 7 days. Do not invent facts.\n\nStudent request:\n" + (agent_question.strip() or "Analyze my current academic situation.") + "\n\nStudySphere context:\n" + agent_context_text
+        else:
+            user_prompt = "Build a focused study plan from the student's actual stored data. Start with today's highest-priority actions, then give a 7-day plan with realistic sessions. Prefer urgent exams and deadlines, then weak or unfinished areas that are visible in the data. Clearly separate what is known from what is a suggested assumption.\n\nStudent request:\n" + (agent_question.strip() or "Build my focus plan for the next 7 days.") + "\n\nStudySphere context:\n" + agent_context_text
+
+        with st.spinner("🤖 StudySphere AI Agent is thinking..."):
+            answer = call_groq_agent(st.session_state.ai_api_key, [{"role": "system", "content": base_system}, {"role": "user", "content": user_prompt}])
+        st.session_state.ai_messages.append({"mode": agent_mode, "question": agent_question.strip(), "answer": answer})
+
+    if st.session_state.ai_messages:
+        latest = st.session_state.ai_messages[-1]
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">{latest["mode"]}</div><div class="ai-title">StudySphere response</div></div>', unsafe_allow_html=True)
+        st.markdown(latest["answer"])
+
+    st.markdown('<div class="panel"><div class="panel-title">🧠 What the agent can see</div><div class="panel-sub">Only the academic data belonging to your signed-in StudySphere account is added to the AI prompt.</div></div>', unsafe_allow_html=True)
+    st.write(f"Subjects: {len(context['subjects'])} • Assignments: {len(context['assignments'])} • Upcoming exams: {len(context['upcoming_exams'])} • Study tasks: {len(context['study_tasks'])}")
+
+    if st.button("🧹 Clear AI session", use_container_width=True):
+        st.session_state.ai_messages = []
+        st.rerun()
 
 st.markdown('<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">StudySphere • Learn smarter. Plan better. Achieve more.</div>', unsafe_allow_html=True)
 
