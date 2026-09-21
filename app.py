@@ -60,6 +60,7 @@ conn = sqlite3.connect("studysphere.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER, user_id TEXT)")
@@ -82,7 +83,35 @@ if "recovery_salt" not in user_columns:
 if "gemini_api_key" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN gemini_api_key TEXT")
 
+# ============================================================
+# GLOBAL GEMINI KEY MIGRATION
+# ============================================================
+# StudySphere uses one Gemini API key for the whole application.
+# Migrate the key already stored on any existing account into a
+# dedicated global settings row. New accounts never need their
+# own copy and never see API-key controls.
+global_key_row = cursor.execute(
+    "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+    ("gemini_api_key",),
+).fetchone()
+if not global_key_row or not str(global_key_row[0] or "").strip():
+    legacy_key_row = cursor.execute(
+        "SELECT gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND trim(gemini_api_key) != '' ORDER BY rowid LIMIT 1"
+    ).fetchone()
+    if legacy_key_row and str(legacy_key_row[0] or "").strip():
+        cursor.execute(
+            "INSERT OR REPLACE INTO app_settings (setting_key, setting_value) VALUES (?, ?)",
+            ("gemini_api_key", str(legacy_key_row[0]).strip()),
+        )
+
 conn.commit()
+
+# Load the global Gemini key silently from the database.
+global_gemini_row = cursor.execute(
+    "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+    ("gemini_api_key",),
+).fetchone()
+GLOBAL_GEMINI_API_KEY = str(global_gemini_row[0] or "").strip() if global_gemini_row else ""
 
 # ============================================================
 # THEME
@@ -267,7 +296,8 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.auth_id = str(auth_id)
     st.session_state.display_name = clean_name(name) or clean_email(email).split("@")[0].title()
     st.session_state.email = clean_email(email)
-    st.session_state.ai_api_key = ""
+    # One application-wide Gemini key is reused for every authenticated user.
+    st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
     st.session_state.ai_messages = []
     st.session_state.page = 1
     st.session_state.show_login = "Sign in"
@@ -276,7 +306,7 @@ def set_authenticated_user(auth_id, name, email):
 def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
     api_key = str(api_key or "").strip()
     if not api_key:
-        return "Please enter your Gemini API key in the AI Agent page before using the agent."
+        return "The AI service is temporarily unavailable. Please try again later."
 
     models_to_try = []
     for candidate in [model, "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]:
@@ -360,7 +390,7 @@ def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
             if exc.code == 400:
                 return f"Gemini rejected the request: {message}"
             if exc.code in (401, 403):
-                return "Gemini authentication/permission failed. Check that the API key is active and allowed to use the Gemini API."
+                return "The AI service could not authenticate this request. Please try again later."
             if exc.code == 429:
                 return "Gemini rate limit reached. Please wait a little and try again."
             if status:
@@ -372,11 +402,7 @@ def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
             return f"Unexpected Gemini error: {type(exc).__name__}: {exc}"
 
     if last_code == 404:
-        return (
-            "Your Gemini API key was accepted, but the available model access for this key did not include "
-            "the models StudySphere tried. In Google AI Studio, make sure the key is an active Gemini API key "
-            "and that the Gemini API is available for its project."
-        )
+        return "The AI service is currently unavailable. Please try again later."
     return last_message
 
 def build_agent_context(auth_id):
@@ -606,14 +632,9 @@ AUTH_ID = str(current_user[0])
 DISPLAY_NAME = str(current_user[1] or "Student")
 EMAIL = str(current_user[2] or "")
 
-# Load the saved Gemini key for this signed-in account.
-saved_gemini_key = cursor.execute(
-    "SELECT gemini_api_key FROM users WHERE auth_id = ?",
-    (AUTH_ID,),
-).fetchone()
-saved_gemini_key = str(saved_gemini_key[0] or "").strip() if saved_gemini_key else ""
-if saved_gemini_key and not st.session_state.ai_api_key:
-    st.session_state.ai_api_key = saved_gemini_key
+# Load the single application-wide Gemini key silently.
+# It is never displayed and is not tied to the currently signed-in account.
+st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
 
 # Keep the name/email in session synchronized with the database.
 st.session_state.display_name = DISPLAY_NAME
@@ -967,32 +988,15 @@ elif st.session_state.page == 6:
 elif st.session_state.page == 7:
     st.markdown('<div class="page-banner"><div class="page-title">🤖 AI Agent</div><div class="page-sub">Ask questions, analyze your academic workload, and turn your stored study data into a focused action plan.</div></div>', unsafe_allow_html=True)
 
+    # The Gemini connection is completely automatic. The application-wide key
+    # is loaded silently from app_settings and is never shown in the interface.
     agent_left, agent_right = st.columns([1.35, 1])
+
     with agent_left:
-        st.markdown('<div class="panel"><div class="panel-title">Connect your AI</div><div class="panel-sub">Your Gemini key can be remembered on your StudySphere account so you do not need to paste it every time.</div></div>', unsafe_allow_html=True)
-        agent_key = st.text_input("Gemini API key", value=st.session_state.ai_api_key, type="password", key="agent_api_key_input")
-        agent_key = agent_key.strip()
-        save_key = st.button("💾 Save Gemini key", use_container_width=True)
-        if save_key:
-            if not agent_key:
-                st.error("Please enter your Gemini API key first.")
-            else:
-                cursor.execute("UPDATE users SET gemini_api_key = ? WHERE auth_id = ?", (agent_key, AUTH_ID))
-                conn.commit()
-                st.session_state.ai_api_key = agent_key
-                st.success("Gemini API key saved to your StudySphere account.")
-        elif agent_key != st.session_state.ai_api_key:
-            st.session_state.ai_api_key = agent_key
-
-        remove_key = st.button("🗑️ Remove saved key", use_container_width=True)
-        if remove_key:
-            cursor.execute("UPDATE users SET gemini_api_key = NULL WHERE auth_id = ?", (AUTH_ID,))
-            conn.commit()
-            st.session_state.ai_api_key = ""
-            st.success("Saved Gemini key removed.")
-            st.rerun()
-
-        st.caption("The key is stored in your StudySphere SQLite account data. Do not commit studysphere.db to a public GitHub repository.")
+        st.markdown(
+            '<div class="ai-panel"><div class="ai-badge">Always ready</div><div class="ai-title">🧠 StudySphere AI Agent</div><div class="ai-text">Your AI Agent is connected to the StudySphere academic workspace. Choose what you want help with below.</div></div>',
+            unsafe_allow_html=True,
+        )
 
     with agent_right:
         context = build_agent_context(AUTH_ID)
@@ -1001,7 +1005,11 @@ elif st.session_state.page == 7:
         st.metric("Active assignments", sum(1 for row in context["assignments"] if str(row[3]).lower() != "completed"))
 
     agent_mode = st.selectbox("Agent mode", ["Ask my AI Tutor", "Analyze my academics", "Build my focus plan"])
-    agent_question = st.text_area("What should the agent work on?", placeholder="Example: I have a database exam soon. What should I study first?", height=120)
+    agent_question = st.text_area(
+        "What should the agent work on?",
+        placeholder="Example: I have a database exam soon. What should I study first?",
+        height=120,
+    )
 
     run_agent = st.button("🚀 Run AI Agent", use_container_width=True)
     if run_agent:
@@ -1013,9 +1021,12 @@ elif st.session_state.page == 7:
         else:
             user_prompt = "Build a focused study plan from the student's actual stored data. Start with today's highest-priority actions, then give a 7-day plan with realistic sessions. Prefer urgent exams and deadlines, then weak or unfinished areas that are visible in the data. Clearly separate what is known from what is a suggested assumption.\n\nStudent request:\n" + (agent_question.strip() or "Build my focus plan for the next 7 days.") + "\n\nStudySphere context:\n" + agent_context_text
 
-        with st.spinner("🤖 StudySphere AI Agent is thinking..."):
-            answer = call_gemini_agent(st.session_state.ai_api_key, user_prompt)
-        st.session_state.ai_messages.append({"mode": agent_mode, "question": agent_question.strip(), "answer": answer})
+        if not GLOBAL_GEMINI_API_KEY:
+            st.error("The AI service is temporarily unavailable. Please try again later.")
+        else:
+            with st.spinner("🤖 StudySphere AI Agent is thinking..."):
+                answer = call_gemini_agent(GLOBAL_GEMINI_API_KEY, user_prompt)
+            st.session_state.ai_messages.append({"mode": agent_mode, "question": agent_question.strip(), "answer": answer})
 
     if st.session_state.ai_messages:
         latest = st.session_state.ai_messages[-1]
