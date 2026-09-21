@@ -46,6 +46,9 @@ if "ai_api_key" not in st.session_state:
 if "ai_messages" not in st.session_state:
     st.session_state.ai_messages = []
 
+if "active_chat_id" not in st.session_state:
+    st.session_state.active_chat_id = None
+
 if "signup_recovery_code" not in st.session_state:
     st.session_state.signup_recovery_code = ""
 
@@ -61,6 +64,8 @@ cursor = conn.cursor()
 
 cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER, user_id TEXT)")
@@ -218,6 +223,22 @@ h1,h2,h3,h4,h5,h6,p,label,.stMarkdown,.stCaption {{ color:{text} !important; }}
 .auth-title {{ font-size:30px; font-weight:850; letter-spacing:-.9px; }}
 .auth-sub {{ margin-top:7px; font-size:13px; color:rgba(255,255,255,.78) !important; line-height:1.6; }}
 .auth-note {{ background:{card2}; border:1px solid {border}; border-radius:14px; padding:12px 14px; color:{muted} !important; font-size:12px; margin-top:14px; }}
+.chat-shell {{ max-width:980px; margin:0 auto; padding-bottom:120px; }}
+.chat-header {{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 0 16px; border-bottom:1px solid {border}; margin-bottom:18px; }}
+.chat-brand {{ font-size:24px; font-weight:850; letter-spacing:-.7px; }}
+.chat-model {{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:{card2}; border:1px solid {border}; color:{muted} !important; font-size:11px; font-weight:750; }}
+.chat-welcome {{ text-align:center; padding:76px 20px 38px; }}
+.chat-welcome-icon {{ width:68px; height:68px; margin:0 auto 16px; border-radius:20px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#14B8A6,#0F766E); color:white !important; font-size:32px; box-shadow:0 14px 30px rgba(20,184,166,.22); }}
+.chat-welcome-title {{ color:{text} !important; font-size:30px; font-weight:850; letter-spacing:-1px; }}
+.chat-welcome-sub {{ color:{muted} !important; font-size:13px; line-height:1.6; max-width:620px; margin:8px auto 22px; }}
+.prompt-card {{ background:{card}; border:1px solid {border}; border-radius:15px; padding:14px; text-align:left; min-height:88px; transition:transform .18s ease,border-color .18s ease; }}
+.prompt-card:hover {{ transform:translateY(-2px); border-color:#5EEAD4; }}
+.prompt-icon {{ font-size:20px; margin-bottom:7px; }}
+.prompt-title {{ color:{text} !important; font-size:12px; font-weight:800; }}
+.prompt-sub {{ color:{muted} !important; font-size:10px; margin-top:3px; }}
+.chat-history-title {{ color:{muted} !important; font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:1.1px; margin:14px 0 7px; }}
+.chat-history-button {{ font-size:11px !important; }}
+[data-testid="stChatMessage"] {{ border-radius:18px; padding:8px 14px; }}
 .user-box {{ padding:11px 10px; border:1px solid {border}; border-radius:14px; background:{card2}; margin:8px 0 10px; }}
 .user-name {{ font-size:13px; font-weight:800; }}
 .user-email {{ font-size:10px; color:{muted} !important; overflow-wrap:anywhere; margin-top:2px; }}
@@ -405,6 +426,224 @@ def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
         return "The AI service is currently unavailable. Please try again later."
     return last_message
 
+
+def make_chat_title(message):
+    text_value = " ".join(str(message or "").strip().split())
+    if not text_value:
+        return "New chat"
+    return text_value[:42] + ("…" if len(text_value) > 42 else "")
+
+
+def create_chat_session(user_id, title="New chat"):
+    chat_id = uuid.uuid4().hex
+    now = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, user_id, title, now, now),
+    )
+    conn.commit()
+    return chat_id
+
+
+def ensure_active_chat(user_id):
+    active_id = st.session_state.get("active_chat_id")
+    if active_id:
+        exists = cursor.execute(
+            "SELECT 1 FROM chat_sessions WHERE id = ? AND user_id = ?",
+            (active_id, user_id),
+        ).fetchone()
+        if exists:
+            return active_id
+
+    latest = cursor.execute(
+        "SELECT id FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if latest:
+        st.session_state.active_chat_id = latest[0]
+        return latest[0]
+
+    new_id = create_chat_session(user_id)
+    st.session_state.active_chat_id = new_id
+    return new_id
+
+
+def list_chat_sessions(user_id):
+    return cursor.execute(
+        "SELECT id, title, updated_at FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30",
+        (user_id,),
+    ).fetchall()
+
+
+def load_chat_messages(chat_id, user_id):
+    return cursor.execute(
+        "SELECT role, content, created_at FROM chat_messages WHERE chat_id = ? AND user_id = ? ORDER BY id",
+        (chat_id, user_id),
+    ).fetchall()
+
+
+def save_chat_message(chat_id, user_id, role, content):
+    now = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO chat_messages (chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, user_id, role, content, now),
+    )
+    cursor.execute(
+        "UPDATE chat_sessions SET updated_at = ? WHERE id = ? AND user_id = ?",
+        (now, chat_id, user_id),
+    )
+    conn.commit()
+
+
+def update_chat_title(chat_id, user_id, title):
+    cursor.execute(
+        "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+        (make_chat_title(title), datetime.now().isoformat(timespec="seconds"), chat_id, user_id),
+    )
+    conn.commit()
+
+
+def delete_chat_session(chat_id, user_id):
+    cursor.execute(
+        "DELETE FROM chat_messages WHERE chat_id = ? AND user_id = ?",
+        (chat_id, user_id),
+    )
+    cursor.execute(
+        "DELETE FROM chat_sessions WHERE id = ? AND user_id = ?",
+        (chat_id, user_id),
+    )
+    conn.commit()
+
+
+def build_gemini_chat_contents(chat_messages):
+    contents = []
+    for role, content, _created_at in chat_messages[-40:]:
+        contents.append({
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": content}],
+        })
+    return contents
+
+
+def stream_gemini_chat(api_key, chat_messages, academic_context, model="gemini-3.1-flash-lite"):
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        yield "The AI service is temporarily unavailable."
+        return
+
+    system_text = (
+        "You are StudySphere AI, a helpful academic companion. Give natural conversational responses like a modern AI assistant. "
+        "Remember the conversation history and answer follow-up questions using it. Keep explanations clear and student-friendly. "
+        "Use the student's StudySphere academic data when it is relevant. Never invent deadlines, exams, assignments, scores, subjects, or personal facts. "
+        "When the student asks for planning help, use the actual stored data first. When they ask a general educational question, answer it normally. "
+        "Use Markdown when it improves readability, including headings, bullets, tables, and code blocks. Do not mention the hidden academic context.\n\n"
+        "Student's current StudySphere context:\n" + academic_context
+    )
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "contents": build_gemini_chat_contents(chat_messages),
+        "generationConfig": {"temperature": 0.65, "maxOutputTokens": 2200},
+    }
+
+    models_to_try = []
+    for candidate in [model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]:
+        if candidate not in models_to_try:
+            models_to_try.append(candidate)
+
+    last_error = "The AI service could not generate a response."
+
+    for current_model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:streamGenerateContent?alt=sse"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            yielded_text = False
+            with urllib.request.urlopen(request, timeout=60) as response:
+                while True:
+                    raw_line = response.readline()
+                    if not raw_line:
+                        break
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_text = line[5:].strip()
+                    if data_text == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(data_text)
+                    except json.JSONDecodeError:
+                        continue
+                    candidates = event.get("candidates") or []
+                    if not candidates:
+                        continue
+                    parts = ((candidates[0].get("content") or {}).get("parts") or [])
+                    chunk_text = "".join(
+                        part.get("text", "")
+                        for part in parts
+                        if isinstance(part, dict) and part.get("text")
+                    )
+                    if chunk_text:
+                        yielded_text = True
+                        yield chunk_text
+
+            if yielded_text:
+                return
+            last_error = "The AI returned an empty response."
+
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8")
+                parsed = json.loads(detail)
+                error_info = parsed.get("error") or {}
+                message = error_info.get("message", "Gemini request failed.")
+            except Exception:
+                message = "Gemini request failed."
+
+            if exc.code == 404:
+                last_error = "The selected Gemini model is unavailable."
+                continue
+            if exc.code in (401, 403):
+                yield "The AI service could not authenticate the request."
+                return
+            if exc.code == 429:
+                yield "Gemini rate limit reached. Please wait a little and try again."
+                return
+            if exc.code == 400:
+                yield f"Gemini rejected the request: {message}"
+                return
+            yield "The AI service encountered an error. Please try again."
+            return
+        except urllib.error.URLError:
+            yield "Could not reach Gemini. Check the app's internet connection and try again."
+            return
+        except Exception:
+            yield "The AI service encountered an unexpected error. Please try again."
+            return
+
+    yield last_error
+
+
+def academic_context_for_chat(auth_id):
+    return format_agent_context(build_agent_context(auth_id))
+
+
+def render_chat_history_sidebar(user_id):
+    st.sidebar.markdown('<div class="chat-history-title">Your conversations</div>', unsafe_allow_html=True)
+    sessions = list_chat_sessions(user_id)
+    for session_id, title, _updated_at in sessions:
+        label = f"💬 {title or 'New chat'}"
+        is_active = session_id == st.session_state.active_chat_id
+        button_label = ("● " if is_active else "  ") + label
+        if st.sidebar.button(button_label, key=f"chat_history_{session_id}", use_container_width=True):
+            st.session_state.active_chat_id = session_id
+            st.session_state.page = 7
+            st.rerun()
+
 def build_agent_context(auth_id):
     subjects = cursor.execute(
         "SELECT name, code, instructor FROM subjects WHERE user_id = ? ORDER BY name",
@@ -441,6 +680,7 @@ def clear_authenticated_user():
     st.session_state.email = ""
     st.session_state.ai_api_key = ""
     st.session_state.ai_messages = []
+    st.session_state.active_chat_id = None
     st.session_state.page = 1
 
 
@@ -639,6 +879,7 @@ st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
 # Keep the name/email in session synchronized with the database.
 st.session_state.display_name = DISPLAY_NAME
 st.session_state.email = EMAIL
+ensure_active_chat(AUTH_ID)
 
 # ============================================================
 # SIDEBAR
@@ -684,8 +925,14 @@ st.session_state.page = dict((label, page_id) for page_id, label in nav_options)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown('<div class="sidebar-label">Intelligence</div>', unsafe_allow_html=True)
-st.sidebar.markdown("### 🤖 AI Agent")
-st.sidebar.caption("Context-aware academic help powered by an AI model.")
+st.sidebar.markdown("### 🤖 StudySphere AI")
+st.sidebar.caption("A conversational academic assistant that remembers your chats.")
+if st.sidebar.button("＋ New chat", key="new_chat_sidebar", use_container_width=True):
+    st.session_state.active_chat_id = create_chat_session(AUTH_ID)
+    st.session_state.ai_messages = []
+    st.session_state.page = 7
+    st.rerun()
+render_chat_history_sidebar(AUTH_ID)
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
 if dark_mode_toggle != st.session_state.dark_mode:
@@ -986,59 +1233,63 @@ elif st.session_state.page == 6:
     st.markdown('<div class="ai-panel"><div class="ai-badge">Account security</div><div class="ai-title">🛡️ Your login is built directly into StudySphere</div><div class="ai-text">StudySphere keeps authentication and academic records in the local SQLite database. Passwords are never stored as plain text.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 7:
-    st.markdown('<div class="page-banner"><div class="page-title">🤖 AI Agent</div><div class="page-sub">Ask questions, analyze your academic workload, and turn your stored study data into a focused action plan.</div></div>', unsafe_allow_html=True)
+    active_chat_id = ensure_active_chat(AUTH_ID)
+    chat_rows = load_chat_messages(active_chat_id, AUTH_ID)
 
-    # The Gemini connection is completely automatic. The application-wide key
-    # is loaded silently from app_settings and is never shown in the interface.
-    agent_left, agent_right = st.columns([1.35, 1])
-
-    with agent_left:
-        st.markdown(
-            '<div class="ai-panel"><div class="ai-badge">Always ready</div><div class="ai-title">🧠 StudySphere AI Agent</div><div class="ai-text">Your AI Agent is connected to the StudySphere academic workspace. Choose what you want help with below.</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    with agent_right:
-        context = build_agent_context(AUTH_ID)
-        st.metric("Subjects in context", len(context["subjects"]))
-        st.metric("Upcoming exams", len(context["upcoming_exams"]))
-        st.metric("Active assignments", sum(1 for row in context["assignments"] if str(row[3]).lower() != "completed"))
-
-    agent_mode = st.selectbox("Agent mode", ["Ask my AI Tutor", "Analyze my academics", "Build my focus plan"])
-    agent_question = st.text_area(
-        "What should the agent work on?",
-        placeholder="Example: I have a database exam soon. What should I study first?",
-        height=120,
+    st.markdown('<div class="chat-shell">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chat-header"><div class="chat-brand">🤖 StudySphere AI</div><div class="chat-model">✦ Gemini • Academic mode</div></div>',
+        unsafe_allow_html=True,
     )
 
-    run_agent = st.button("🚀 Run AI Agent", use_container_width=True)
-    if run_agent:
-        agent_context_text = format_agent_context(context)
-        if agent_mode == "Ask my AI Tutor":
-            user_prompt = "Answer the student's question using the StudySphere context below. Give a simple explanation first, then examples or steps where useful.\n\nStudent question:\n" + (agent_question.strip() or "Give me one useful academic recommendation based on my current data.") + "\n\nStudySphere context:\n" + agent_context_text
-        elif agent_mode == "Analyze my academics":
-            user_prompt = "Analyze the student's current academic workload from the context below. Identify the most time-sensitive items, possible overloads or gaps, and 3 concrete actions for the next 7 days. Do not invent facts.\n\nStudent request:\n" + (agent_question.strip() or "Analyze my current academic situation.") + "\n\nStudySphere context:\n" + agent_context_text
-        else:
-            user_prompt = "Build a focused study plan from the student's actual stored data. Start with today's highest-priority actions, then give a 7-day plan with realistic sessions. Prefer urgent exams and deadlines, then weak or unfinished areas that are visible in the data. Clearly separate what is known from what is a suggested assumption.\n\nStudent request:\n" + (agent_question.strip() or "Build my focus plan for the next 7 days.") + "\n\nStudySphere context:\n" + agent_context_text
+    if not chat_rows:
+        st.markdown(
+            '<div class="chat-welcome"><div class="chat-welcome-icon">✦</div><div class="chat-welcome-title">How can I help you study?</div><div class="chat-welcome-sub">Ask anything about your coursework, get help understanding difficult topics, review your deadlines, or turn your StudySphere data into a practical plan.</div></div>',
+            unsafe_allow_html=True,
+        )
+        p1, p2, p3, p4 = st.columns(4)
+        p1.markdown('<div class="prompt-card"><div class="prompt-icon">🧠</div><div class="prompt-title">Explain a topic</div><div class="prompt-sub">Make a difficult concept simple</div></div>', unsafe_allow_html=True)
+        p2.markdown('<div class="prompt-card"><div class="prompt-icon">📅</div><div class="prompt-title">Plan my week</div><div class="prompt-sub">Use my real deadlines and exams</div></div>', unsafe_allow_html=True)
+        p3.markdown('<div class="prompt-card"><div class="prompt-icon">📝</div><div class="prompt-title">Review my work</div><div class="prompt-sub">Help me find what needs attention</div></div>', unsafe_allow_html=True)
+        p4.markdown('<div class="prompt-card"><div class="prompt-icon">🎯</div><div class="prompt-title">Quiz me</div><div class="prompt-sub">Practice before an exam</div></div>', unsafe_allow_html=True)
 
-        if not GLOBAL_GEMINI_API_KEY:
-            st.error("The AI service is temporarily unavailable. Please try again later.")
-        else:
-            with st.spinner("🤖 StudySphere AI Agent is thinking..."):
-                answer = call_gemini_agent(GLOBAL_GEMINI_API_KEY, user_prompt)
-            st.session_state.ai_messages.append({"mode": agent_mode, "question": agent_question.strip(), "answer": answer})
+    for role, content, _created_at in chat_rows:
+        avatar = "🧑‍🎓" if role == "user" else "🤖"
+        with st.chat_message("user" if role == "user" else "assistant", avatar=avatar):
+            st.markdown(content)
 
-    if st.session_state.ai_messages:
-        latest = st.session_state.ai_messages[-1]
-        st.markdown(f'<div class="ai-panel"><div class="ai-badge">{latest["mode"]}</div><div class="ai-title">StudySphere response</div></div>', unsafe_allow_html=True)
-        st.markdown(latest["answer"])
+    chat_prompt = st.chat_input("Message StudySphere AI…")
+    if chat_prompt:
+        prompt_text = chat_prompt.strip()
+        if prompt_text:
+            st.session_state.ai_messages = []
+            save_chat_message(active_chat_id, AUTH_ID, "user", prompt_text)
+            if not chat_rows:
+                update_chat_title(active_chat_id, AUTH_ID, prompt_text)
 
-    st.markdown('<div class="panel"><div class="panel-title">🧠 What the agent can see</div><div class="panel-sub">Only the academic data belonging to your signed-in StudySphere account is added to the AI prompt.</div></div>', unsafe_allow_html=True)
-    st.write(f"Subjects: {len(context['subjects'])} • Assignments: {len(context['assignments'])} • Upcoming exams: {len(context['upcoming_exams'])} • Study tasks: {len(context['study_tasks'])}")
+            with st.chat_message("user", avatar="🧑‍🎓"):
+                st.markdown(prompt_text)
 
-    if st.button("🧹 Clear AI session", use_container_width=True):
-        st.session_state.ai_messages = []
-        st.rerun()
+            refreshed_rows = load_chat_messages(active_chat_id, AUTH_ID)
+            academic_context = academic_context_for_chat(AUTH_ID)
+            with st.chat_message("assistant", avatar="🤖"):
+                with st.spinner("Thinking…"):
+                    streamed_answer = st.write_stream(
+                        stream_gemini_chat(
+                            GLOBAL_GEMINI_API_KEY,
+                            refreshed_rows,
+                            academic_context,
+                        )
+                    )
+
+            answer_text = streamed_answer if isinstance(streamed_answer, str) else str(streamed_answer)
+            answer_text = answer_text.strip()
+            if not answer_text:
+                answer_text = "I could not generate a response. Please try again."
+            save_chat_message(active_chat_id, AUTH_ID, "assistant", answer_text)
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">StudySphere • Learn smarter. Plan better. Achieve more.</div>', unsafe_allow_html=True)
 
