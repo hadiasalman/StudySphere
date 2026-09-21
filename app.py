@@ -147,7 +147,7 @@ else:
 st.markdown(
     f"""
 <style>
-.stApp {{ background:{bg}; color:{text}; }}
+.stApp {{ --ss-bg:{bg}; --ss-card:{card}; --ss-chat-assistant:{card}; background:{bg}; color:{text}; }}
 [data-testid="stAppViewContainer"] {{ background:{bg}; }}
 [data-testid="stHeader"] {{ background:transparent; }}
 .block-container {{ max-width:1450px; padding-top:1.4rem; padding-bottom:3rem; animation:floatIn .45s ease-out; }}
@@ -262,6 +262,362 @@ div.stButton > button:hover {{ background:#0F766E !important; border-color:#0F76
 div.stButton > button p,div.stButton > button span {{ color:white !important; }}
 
 @media (max-width:900px) {{ .hero {{ padding:25px; }} .hero-title {{ font-size:28px; }} .panel {{ padding:17px; }} .auth-wrap {{ margin:20px auto; }} }}
+
+/* ============================================================
+   STUDIO-GRADE VISUAL SYSTEM
+   ============================================================ */
+:root {{
+  --ss-teal:#14B8A6;
+  --ss-teal-deep:#0F766E;
+  --ss-teal-soft:#CCFBF1;
+}}
+
+/* App shell */
+[data-testid="stAppViewContainer"] {{
+  background:
+    radial-gradient(circle at 15% 8%, rgba(20,184,166,.055), transparent 22%),
+    radial-gradient(circle at 92% 18%, rgba(59,130,246,.045), transparent 24%),
+    var(--ss-bg, #F4F7FB) !important;
+}}
+.main .block-container {{
+  max-width: 1480px;
+  padding-left: 2.1rem;
+  padding-right: 2.1rem;
+}}
+
+/* Premium scrollbar */
+* {{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20,184,166,.38) transparent;
+}}
+*::-webkit-scrollbar {{ width:8px; height:8px; }}
+*::-webkit-scrollbar-track {{ background:transparent; }}
+*::-webkit-scrollbar-thumb {{ background:rgba(20,184,166,.35); border-radius:999px; }}
+*::-webkit-scrollbar-thumb:hover {{ background:rgba(20,184,166,.55); }}
+
+/* Sidebar */
+[data-testid="stSidebar"] {{
+  box-shadow: 12px 0 40px rgba(15,23,42,.04);
+}}
+[data-testid="stSidebarContent"] {{
+  padding: 1.05rem .85rem 1rem;
+}}
+[data-testid="stSidebar"] .brand {{
+  padding: .6rem .45rem 1.25rem;
+}}
+[data-testid="stSidebar"] .brand-name {{
+  font-size: 24px;
+  letter-spacing: -1px;
+}}
+[data-testid="stSidebar"] .logo {{
+  position:relative;
+  overflow:hidden;
+  box-shadow:0 10px 28px rgba(20,184,166,.24);
+}}
+[data-testid="stSidebar"] .logo::after {{
+  content:"";
+  position:absolute;
+  width:70px;
+  height:70px;
+  top:-45px;
+  right:-25px;
+  border-radius:50%;
+  background:rgba(255,255,255,.18);
+}}
+
+/* Sidebar navigation polished as pill items */
+[data-testid="stSidebar"] div[role="radiogroup"] {{
+  gap: .28rem;
+}}
+[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+  border-radius: 13px;
+  padding: .55rem .72rem;
+  margin: 0;
+  border: 1px solid transparent;
+  transition: background .18s ease, transform .18s ease, border-color .18s ease;
+}}
+[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+  background: rgba(20,184,166,.07);
+  border-color: rgba(20,184,166,.14);
+  transform: translateX(2px);
+}}
+[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {{
+  background: linear-gradient(90deg, rgba(20,184,166,.14), rgba(20,184,166,.05));
+  border-color: rgba(20,184,166,.24);
+  box-shadow: inset 3px 0 0 #14B8A6, 0 8px 18px rgba(20,184,166,.06);
+}}
+[data-testid="stSidebar"] div[role="radiogroup"] > label p {{
+  font-size: .86rem;
+  font-weight: 720;
+}}
+
+/* User account card */
+.user-box {{
+  box-shadow:0 10px 26px rgba(15,23,42,.045);
+  backdrop-filter:blur(10px);
+}}
+.avatar {{
+  box-shadow:0 7px 16px rgba(20,184,166,.22);
+}}
+
+/* Global controls */
+div.stButton > button,
+button[kind="primary"],
+button[kind="secondary"] {{
+  min-height: 43px;
+  border-radius: 12px !important;
+  font-weight: 760 !important;
+  letter-spacing: -.1px;
+}}
+div.stButton > button:hover {{
+  box-shadow: 0 10px 24px rgba(20,184,166,.18) !important;
+}}
+
+/* Inputs */
+div[data-baseweb="input"], div[data-baseweb="textarea"] {{
+  border-radius: 12px !important;
+}}
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div {{
+  border-radius: 12px !important;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}}
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within {{
+  border-color:#2DD4BF !important;
+  box-shadow:0 0 0 3px rgba(20,184,166,.10) !important;
+}}
+
+/* Selects */
+div[data-baseweb="select"] > div {{
+  border-radius:12px !important;
+  min-height:43px;
+}}
+
+/* Cards */
+.stat-card {{
+  position:relative;
+  overflow:hidden;
+  backdrop-filter:blur(12px);
+}}
+.stat-card::after {{
+  content:"";
+  position:absolute;
+  width:120px;
+  height:120px;
+  right:-55px;
+  bottom:-65px;
+  border-radius:50%;
+  background:rgba(20,184,166,.06);
+  pointer-events:none;
+}}
+.quick-card,
+.panel,
+.page-banner,
+.auth-card {{
+  backdrop-filter: blur(12px);
+}}
+.panel,
+.page-banner {{
+  box-shadow: 0 14px 34px rgba(15,23,42,.055);
+}}
+.panel:hover,
+.stat-card:hover,
+.quick-card:hover {{
+  box-shadow: 0 18px 40px rgba(15,23,42,.085);
+}}
+
+/* Hero polish */
+.hero {{
+  min-height: 210px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+}}
+.hero::before {{
+  content:"";
+  position:absolute;
+  width:280px;
+  height:280px;
+  right:-90px;
+  bottom:-130px;
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:50%;
+  box-shadow:0 0 0 38px rgba(255,255,255,.025), 0 0 0 76px rgba(255,255,255,.018);
+}}
+.hero-title {{ text-shadow:0 2px 18px rgba(0,0,0,.10); }}
+.hero-pill {{ backdrop-filter: blur(8px); }}
+
+/* Progress */
+.progress-shell {{
+  box-shadow: inset 0 1px 2px rgba(15,23,42,.08);
+}}
+.progress-bar {{
+  position:relative;
+  box-shadow:0 4px 12px rgba(20,184,166,.22);
+}}
+.progress-bar::after {{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent);
+  transform:translateX(-100%);
+  animation:ssProgressShimmer 2.8s ease-in-out infinite;
+}}
+@keyframes ssProgressShimmer {{
+  0% {{ transform:translateX(-100%); }}
+  70%,100% {{ transform:translateX(100%); }}
+}}
+
+/* Empty/info states */
+[data-testid="stAlert"] {{
+  border-radius:14px !important;
+  border-width:1px !important;
+  box-shadow:0 8px 22px rgba(15,23,42,.04);
+}}
+
+/* Dataframes */
+[data-testid="stDataFrame"] {{
+  box-shadow:0 8px 22px rgba(15,23,42,.04);
+}}
+
+/* Chat interface */
+.chat-shell {{
+  max-width: 1000px;
+  margin: 0 auto;
+}}
+.chat-header {{
+  position:sticky;
+  top:0;
+  z-index:20;
+  background:color-mix(in srgb, var(--ss-card, #fff) 86%, transparent);
+  backdrop-filter:blur(16px);
+  padding: .65rem 0 .85rem;
+}}
+.chat-brand {{
+  font-size:26px;
+}}
+.chat-model {{
+  box-shadow:0 7px 18px rgba(15,23,42,.045);
+}}
+.chat-welcome {{
+  padding-top:68px;
+}}
+.chat-welcome-icon {{
+  position:relative;
+  animation:ssFloat 3.6s ease-in-out infinite;
+}}
+.chat-welcome-icon::after {{
+  content:"";
+  position:absolute;
+  inset:-7px;
+  border-radius:23px;
+  border:1px solid rgba(20,184,166,.20);
+  animation:ssRing 2.8s ease-out infinite;
+}}
+@keyframes ssFloat {{
+  0%,100% {{ transform:translateY(0); }}
+  50% {{ transform:translateY(-5px); }}
+}}
+@keyframes ssRing {{
+  0% {{ opacity:.55; transform:scale(1); }}
+  100% {{ opacity:0; transform:scale(1.17); }}
+}}
+.prompt-card {{
+  box-shadow:0 10px 24px rgba(15,23,42,.045);
+}}
+
+/* Native Streamlit chat bubbles */
+[data-testid="stChatMessage"] {{
+  border:1px solid rgba(148,163,184,.12);
+  box-shadow:0 8px 26px rgba(15,23,42,.035);
+  margin-bottom:14px;
+}}
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {{
+  line-height:1.72;
+}}
+/* User bubble gets a subtle tinted surface */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {{
+  background:linear-gradient(145deg, rgba(20,184,166,.07), rgba(20,184,166,.025));
+}}
+/* Assistant bubble stays crisp */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {{
+  background:var(--ss-chat-assistant, rgba(255,255,255,.86));
+}}
+
+/* Chat input */
+[data-testid="stChatInput"] {{
+  max-width:1000px;
+  margin-left:auto;
+  margin-right:auto;
+}}
+[data-testid="stChatInput"] > div {{
+  border-radius:18px !important;
+  border:1px solid rgba(148,163,184,.24) !important;
+  box-shadow:0 12px 32px rgba(15,23,42,.09) !important;
+  transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}}
+[data-testid="stChatInput"] > div:focus-within {{
+  border-color:#5EEAD4 !important;
+  box-shadow:0 16px 38px rgba(20,184,166,.14), 0 0 0 3px rgba(20,184,166,.07) !important;
+  transform:translateY(-1px);
+}}
+[data-testid="stChatInput"] textarea {{
+  min-height:54px !important;
+}}
+
+/* Metrics */
+[data-testid="stMetric"] {{
+  border-radius:16px !important;
+  box-shadow:0 9px 22px rgba(15,23,42,.045);
+}}
+
+/* Auth screen */
+.auth-wrap {{ max-width:1040px; }}
+.auth-card {{
+  box-shadow:0 26px 80px rgba(15,23,42,.12);
+}}
+.auth-brand {{
+  position:relative;
+  overflow:hidden;
+}}
+.auth-brand::after {{
+  content:"";
+  position:absolute;
+  width:310px;
+  height:310px;
+  right:-130px;
+  top:-180px;
+  border-radius:50%;
+  border:1px solid rgba(255,255,255,.10);
+  box-shadow:0 0 0 35px rgba(255,255,255,.025),0 0 0 70px rgba(255,255,255,.018);
+}}
+.auth-logo {{
+  position:relative;
+  z-index:1;
+  box-shadow:0 10px 24px rgba(0,0,0,.10);
+}}
+
+/* Footer */
+footer {{ visibility:hidden; }}
+
+/* Reduced-motion accessibility */
+@media (prefers-reduced-motion: reduce) {{
+  *, *::before, *::after {{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }}
+}}
+
+@media (max-width: 900px) {{
+  .main .block-container {{ padding-left:1rem; padding-right:1rem; }}
+  .hero {{ min-height:180px; }}
+  .chat-welcome {{ padding-top:44px; }}
+  .chat-brand {{ font-size:21px; }}
+}}
+
 </style>
 """,
     unsafe_allow_html=True,
