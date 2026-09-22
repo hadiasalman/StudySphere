@@ -118,7 +118,7 @@ if "reset_recovery_code" not in st.session_state:
 conn = sqlite3.connect("studysphere.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT, password_changed_at TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, gemini_interaction_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)")
@@ -157,10 +157,13 @@ if "last_login_at" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
 if "last_seen_at" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT")
+if "password_changed_at" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
 
 backfill_now = datetime.now().isoformat(timespec="seconds")
 cursor.execute("UPDATE users SET created_at = COALESCE(created_at, ?) WHERE created_at IS NULL OR trim(created_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET last_seen_at = COALESCE(last_seen_at, created_at, ?) WHERE last_seen_at IS NULL OR trim(last_seen_at) = ''", (backfill_now,))
+cursor.execute("UPDATE users SET password_changed_at = COALESCE(password_changed_at, created_at, ?) WHERE password_hash IS NOT NULL AND (password_changed_at IS NULL OR trim(password_changed_at) = '')", (backfill_now,))
 
 # ============================================================
 # CREATOR / ADMIN CONFIGURATION
@@ -2355,20 +2358,21 @@ def render_auth_screen():
                     st.error("An account with this email already exists. Please sign in instead.")
                 else:
                     auth_id = existing[0] if existing else f"local-{uuid.uuid4().hex}"
+                    now = datetime.now().isoformat(timespec="seconds")
                     password_salt, password_hash = hash_secret(password)
                     recovery_code = generate_recovery_code()
                     recovery_salt, recovery_hash = hash_secret(recovery_code)
                     try:
                         if existing:
                             cursor.execute(
-                                "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ? WHERE auth_id = ?",
-                                (name, email, password_hash, password_salt, recovery_hash, recovery_salt, auth_id),
+                                "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ? WHERE auth_id = ?",
+                                (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now if 'now' in locals() else datetime.now().isoformat(timespec="seconds"), auth_id),
                             )
                         else:
                             now = datetime.now().isoformat(timespec="seconds")
                             cursor.execute(
-                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now),
+                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now),
                             )
                         conn.commit()
                         migrate_legacy_rows_to_first_local_account(auth_id)
@@ -2414,8 +2418,8 @@ def render_auth_screen():
                 new_recovery_code = generate_recovery_code()
                 recovery_salt, recovery_hash = hash_secret(new_recovery_code)
                 cursor.execute(
-                    "UPDATE users SET password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ? WHERE auth_id = ?",
-                    (password_hash, password_salt, recovery_hash, recovery_salt, account[0]),
+                    "UPDATE users SET password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ? WHERE auth_id = ?",
+                    (password_hash, password_salt, recovery_hash, recovery_salt, datetime.now().isoformat(timespec="seconds"), account[0]),
                 )
                 conn.commit()
                 set_authenticated_user(account[0], account[1], account[2])
@@ -2949,7 +2953,7 @@ elif st.session_state.page == 7:
             password_salt, password_hash = hash_secret(new_password)
             recovery_code = generate_recovery_code()
             recovery_salt, recovery_hash = hash_secret(recovery_code)
-            cursor.execute("UPDATE users SET password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ? WHERE auth_id = ?", (password_hash, password_salt, recovery_hash, recovery_salt, AUTH_ID))
+            cursor.execute("UPDATE users SET password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ? WHERE auth_id = ?", (password_hash, password_salt, recovery_hash, recovery_salt, datetime.now().isoformat(timespec="seconds"), AUTH_ID))
             conn.commit()
             st.success("Password updated successfully.")
             st.info("Your recovery code has been rotated. Save the new code safely.")
@@ -3206,7 +3210,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
 
     st.markdown('<div class="panel"><div class="panel-title">👥 User directory</div><div class="panel-sub">Read-only creator access. Passwords, password hashes, recovery codes, and API keys are never shown.</div></div>', unsafe_allow_html=True)
     user_rows = cursor.execute(
-        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, created_at, last_login_at, last_seen_at FROM users WHERE password_hash IS NOT NULL ORDER BY created_at DESC"
+        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, created_at, last_login_at, last_seen_at, password_changed_at FROM users WHERE password_hash IS NOT NULL ORDER BY created_at DESC"
     ).fetchall()
     directory_rows = []
     for row in user_rows:
@@ -3214,7 +3218,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
             "Name": row[1] or "", "Email": row[2] or "", "University": row[3] or "",
             "Degree": row[4] or "", "Semester": row[5] or "", "Career goal": row[6] or "",
             "Skills": row[7] or "", "Joined": row[8] or "", "Last login": row[9] or "Never",
-            "Last active": row[10] or "Never",
+            "Last active": row[10] or "Never", "Password changed": row[11] or "Unknown",
         })
     if directory_rows:
         st.dataframe(directory_rows, use_container_width=True, hide_index=True)
@@ -3232,7 +3236,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
         selected_user_label = st.selectbox("User", list(user_options.keys()), key="creator_user_selector")
         selected_user_id = user_options[selected_user_label]
         selected = cursor.execute(
-            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, created_at, last_login_at, last_seen_at FROM users WHERE auth_id = ?",
+            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, created_at, last_login_at, last_seen_at, password_changed_at, password_hash, password_salt, recovery_hash, recovery_salt FROM users WHERE auth_id = ?",
             (selected_user_id,),
         ).fetchone()
         if selected:
@@ -3263,6 +3267,17 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                 st.caption(f"Joined: {selected[8] or '—'}")
                 st.caption(f"Last login: {selected[9] or 'Never'}")
                 st.caption(f"Last active: {selected[10] or 'Never'}")
+
+            st.markdown("#### Account security")
+            security_col1, security_col2 = st.columns(2)
+            with security_col1:
+                st.write("**Password:** Set")
+                st.write("**Storage:** Salted PBKDF2-SHA256")
+                st.write("**Password last changed:** " + (selected[11] or "Unknown"))
+            with security_col2:
+                st.write("**Recovery code:** " + ("Configured" if selected[14] and selected[15] else "Not configured"))
+                st.write("**Password visibility:** Never displayed")
+                st.caption("The database stores a one-way password hash, not the user's plain-text password. The creator can audit password security without exposing the credential itself.")
 
         st.markdown("#### Stored academic records")
         assn = cursor.execute(
@@ -3321,7 +3336,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
             else:
                 st.info("No AI conversations stored.")
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">Creator security</div><div class="ai-title">🔒 Admin access is read-only</div><div class="ai-text">Only the creator/admin account can open this page. User passwords, password hashes, recovery codes, and Gemini API keys are intentionally excluded from the dashboard.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Creator security</div><div class="ai-title">🔒 Admin access is protected</div><div class="ai-text">Only the creator/admin account can open this page. User profile and academic information can be audited, while plain-text passwords and credential hashes are never displayed because the app stores passwords as salted one-way hashes.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 10:
     st.markdown('<div class="page-banner"><div class="page-title">🔄 Document Converter</div><div class="page-sub">Convert your study documents between PDF, DOCX, TXT, and Markdown in one clean workspace.</div></div>', unsafe_allow_html=True)
