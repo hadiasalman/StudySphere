@@ -175,6 +175,18 @@ def configured_admin_email():
         pass
     return str(value or "").strip().lower()
 
+def configured_gemini_api_key():
+    # Prefer deployment secrets/environment variables. Fall back to the
+    # application database so existing StudySphere installations keep working.
+    value = os.getenv("GEMINI_API_KEY", "")
+    try:
+        secret_value = st.secrets.get("GEMINI_API_KEY", "")
+        if secret_value:
+            value = secret_value
+    except Exception:
+        pass
+    return str(value or "").strip()
+
 ADMIN_EMAIL = configured_admin_email()
 if ADMIN_EMAIL:
     cursor.execute("UPDATE users SET is_admin = 0")
@@ -212,12 +224,15 @@ if not global_key_row or not str(global_key_row[0] or "").strip():
 
 conn.commit()
 
-# Load the global Gemini key silently from the database.
+# Load the global Gemini key. A deployment secret takes precedence over the
+# database value, while the database remains a fallback for existing apps.
 global_gemini_row = cursor.execute(
     "SELECT setting_value FROM app_settings WHERE setting_key = ?",
     ("gemini_api_key",),
 ).fetchone()
-GLOBAL_GEMINI_API_KEY = str(global_gemini_row[0] or "").strip() if global_gemini_row else ""
+db_gemini_key = str(global_gemini_row[0] or "").strip() if global_gemini_row else ""
+secret_gemini_key = configured_gemini_api_key()
+GLOBAL_GEMINI_API_KEY = secret_gemini_key or db_gemini_key
 
 # ============================================================
 # THEME
@@ -1909,12 +1924,8 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 9000,
-                "responseFormat": {
-                    "text": {
-                        "mimeType": "application/json",
-                        "schema": schema,
-                    }
-                },
+                "responseMimeType": "application/json",
+                "responseSchema": schema,
             },
         }
 
@@ -3002,6 +3013,9 @@ elif st.session_state.page == 9:
     if generate_presentation:
         if not presentation_prompt.strip():
             st.error("Please describe what you want the presentation to cover.")
+        elif not GLOBAL_GEMINI_API_KEY:
+            st.error("Gemini API key is not configured for StudySphere.")
+            st.info("Creator: open Creator Dashboard → Gemini configuration and save your Gemini API key, or add GEMINI_API_KEY to Streamlit Secrets.")
         elif Presentation is None:
             st.error("PowerPoint support is not installed. Add python-pptx to requirements.txt and redeploy the app.")
         else:
@@ -3106,6 +3120,33 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
     m4.metric("AI messages", total_chat_messages)
     m5.metric("Chats", total_chat_sessions)
     m6.metric("Documents", total_documents)
+
+    st.markdown('<div class="panel"><div class="panel-title">⚙️ Gemini configuration</div><div class="panel-sub">Creator-only setup. The existing API key is never displayed. Save a new key here when the deployed app has no Gemini secret configured.</div></div>', unsafe_allow_html=True)
+    if GLOBAL_GEMINI_API_KEY:
+        st.success("Gemini is configured and ready for AI features.")
+    else:
+        st.warning("Gemini is not configured. Presentation Studio and the AI Agent cannot call Gemini until a key is added.")
+    creator_gemini_key = st.text_input(
+        "Gemini API key",
+        type="password",
+        placeholder="Paste your Gemini API key here",
+        key="creator_gemini_key_input",
+        help="Your current key is never displayed back to you.",
+    )
+    if st.button("💾 Save Gemini configuration", key="save_creator_gemini_key", use_container_width=True):
+        new_key = str(creator_gemini_key or "").strip()
+        if not new_key:
+            st.error("Please paste a Gemini API key before saving.")
+        else:
+            cursor.execute(
+                "INSERT OR REPLACE INTO app_settings (setting_key, setting_value) VALUES (?, ?)",
+                ("gemini_api_key", new_key),
+            )
+            conn.commit()
+            GLOBAL_GEMINI_API_KEY = new_key
+            st.session_state.ai_api_key = new_key
+            st.success("Gemini configuration saved. AI Agent and Presentation Studio are ready.")
+            st.rerun()
 
     st.markdown('<div class="panel"><div class="panel-title">👥 User directory</div><div class="panel-sub">Read-only creator access. Passwords, password hashes, recovery codes, and API keys are never shown.</div></div>', unsafe_allow_html=True)
     user_rows = cursor.execute(
