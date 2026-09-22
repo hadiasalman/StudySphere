@@ -341,6 +341,25 @@ div.stButton > button:hover {
 }
 div.stButton > button p, div.stButton > button span { color:#fff !important; }
 
+/* Download buttons: keep a dark, high-contrast surface so white text stays readable in dark mode. */
+[data-testid="stDownloadButton"] > button {
+  min-height:44px !important;
+  border-radius:13px !important;
+  background:linear-gradient(135deg,#7C3AED,#6D28D9) !important;
+  border:1px solid #5B21B6 !important;
+  color:#FFFFFF !important;
+  box-shadow:0 8px 18px rgba(76,29,149,.18) !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+  background:linear-gradient(135deg,#6D28D9,#5B21B6) !important;
+  transform:translateY(-1px) !important;
+}
+[data-testid="stDownloadButton"] > button p,
+[data-testid="stDownloadButton"] > button span,
+[data-testid="stDownloadButton"] > button div {
+  color:#FFFFFF !important;
+}
+
 /* General surfaces */
 .page-banner {
   padding:20px 22px; border-radius:18px; background:var(--ss-surface); border:1px solid var(--ss-border);
@@ -1712,106 +1731,239 @@ def _presentation_json_from_text(raw_text):
     return json.loads(cleaned[start:end+1])
 
 
+def _available_gemini_generation_models(api_key):
+    api_key = str(api_key or "").strip()
+    preferred = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+    ]
+    if not api_key:
+        return preferred
+
+    try:
+        request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": api_key},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        available = set()
+        for model in payload.get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            methods = model.get("supportedGenerationMethods") or []
+            model_name = str(model.get("name") or "").split("/")[-1].strip()
+            if model_name and "generateContent" in methods:
+                available.add(model_name)
+
+        ordered = [model for model in preferred if model in available]
+        ordered += sorted(
+            model for model in available
+            if model.startswith("gemini-") and model not in ordered
+        )
+        return ordered or preferred
+    except Exception:
+        return preferred
+
+
+def _normalize_presentation_deck(deck, slide_count):
+    if not isinstance(deck, dict):
+        raise ValueError("The presentation response was not a JSON object.")
+
+    deck["title"] = str(deck.get("title") or "StudySphere Presentation").strip()
+    deck["subtitle"] = str(deck.get("subtitle") or "").strip()
+    deck["closing_title"] = str(deck.get("closing_title") or "Key takeaways").strip()
+    closing = deck.get("closing_bullets") or []
+    if not isinstance(closing, list):
+        closing = [closing]
+    deck["closing_bullets"] = [str(item).strip() for item in closing if str(item or "").strip()][:6]
+
+    normalized_slides = []
+    allowed_layouts = {"content", "two_column", "process", "quote", "section", "timeline"}
+    for raw_slide in list(deck.get("slides") or [])[:int(slide_count)]:
+        if not isinstance(raw_slide, dict):
+            continue
+        slide = {}
+        slide["title"] = str(raw_slide.get("title") or "Untitled slide").strip()
+        slide["subtitle"] = str(raw_slide.get("subtitle") or "").strip()
+        slide["section"] = str(raw_slide.get("section") or "StudySphere").strip()
+        slide["layout"] = str(raw_slide.get("layout") or "content").strip().lower()
+        if slide["layout"] not in allowed_layouts:
+            slide["layout"] = "content"
+        slide["body"] = str(raw_slide.get("body") or "").strip()
+        slide["source"] = str(raw_slide.get("source") or "").strip()
+
+        bullets = raw_slide.get("bullets") or []
+        if not isinstance(bullets, list):
+            bullets = [bullets]
+        slide["bullets"] = [str(item).strip() for item in bullets if str(item or "").strip()][:8]
+
+        steps = raw_slide.get("steps") or []
+        if not isinstance(steps, list):
+            steps = [steps]
+        slide["steps"] = [str(item).strip() for item in steps if str(item or "").strip()][:8]
+
+        slide["left_title"] = str(raw_slide.get("left_title") or "").strip()
+        left_bullets = raw_slide.get("left_bullets") or []
+        if not isinstance(left_bullets, list):
+            left_bullets = [left_bullets]
+        slide["left_bullets"] = [str(item).strip() for item in left_bullets if str(item or "").strip()][:6]
+
+        slide["right_title"] = str(raw_slide.get("right_title") or "").strip()
+        right_bullets = raw_slide.get("right_bullets") or []
+        if not isinstance(right_bullets, list):
+            right_bullets = [right_bullets]
+        slide["right_bullets"] = [str(item).strip() for item in right_bullets if str(item or "").strip()][:6]
+
+        normalized_slides.append(slide)
+
+    deck["slides"] = normalized_slides
+    if not deck["slides"]:
+        raise ValueError("The generated presentation contained no usable slides.")
+    return deck
+
+
 def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone, theme_name, use_notes):
     api_key = str(GLOBAL_GEMINI_API_KEY or "").strip()
     if not api_key:
-        return None, "The presentation generator is temporarily unavailable."
+        return None, "The presentation generator is not configured yet."
 
     rag_context = ""
     try:
-        relevant_chunks = retrieve_relevant_chunks(auth_id, prompt_text, top_k=10)
+        relevant_chunks = retrieve_relevant_chunks(auth_id, prompt_text, top_k=12)
+        if not relevant_chunks and any(term in str(prompt_text).lower() for term in [
+            "my notes", "my documents", "uploaded notes", "uploaded documents",
+            "lecture notes", "the notes i uploaded", "the document i uploaded",
+        ]):
+            relevant_chunks = retrieve_fallback_document_chunks(auth_id, top_k=12)
         rag_context = format_rag_context(relevant_chunks)
     except Exception:
         rag_context = ""
 
     schema = {
-        "title": "Presentation title",
-        "subtitle": "One-sentence subtitle",
-        "closing_title": "Key takeaways",
-        "closing_bullets": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
-        "slides": [
-            {
-                "title": "Slide title",
-                "subtitle": "Optional subtitle",
-                "section": "Section label",
-                "layout": "content | two_column | process | quote | section",
-                "body": "Optional paragraph",
-                "bullets": ["Point 1", "Point 2", "Point 3"],
-                "left_title": "Optional left heading",
-                "left_bullets": ["Left point"],
-                "right_title": "Optional right heading",
-                "right_bullets": ["Right point"],
-                "steps": ["Step 1", "Step 2", "Step 3"],
-                "source": "Optional attribution"
-            }
-        ]
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "subtitle": {"type": "string"},
+            "closing_title": {"type": "string"},
+            "closing_bullets": {"type": "array", "items": {"type": "string"}},
+            "slides": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "subtitle": {"type": "string"},
+                        "section": {"type": "string"},
+                        "layout": {"type": "string", "enum": ["content", "two_column", "process", "quote", "section"]},
+                        "body": {"type": "string"},
+                        "bullets": {"type": "array", "items": {"type": "string"}},
+                        "left_title": {"type": "string"},
+                        "left_bullets": {"type": "array", "items": {"type": "string"}},
+                        "right_title": {"type": "string"},
+                        "right_bullets": {"type": "array", "items": {"type": "string"}},
+                        "steps": {"type": "array", "items": {"type": "string"}},
+                        "source": {"type": "string"},
+                    },
+                    "required": ["title", "subtitle", "section", "layout", "body", "bullets", "left_title", "left_bullets", "right_title", "right_bullets", "steps", "source"],
+                },
+            },
+        },
+        "required": ["title", "subtitle", "closing_title", "closing_bullets", "slides"],
     }
 
     system_text = (
         strict_ai_system_instruction()
-        + "You are StudySphere Presentation Designer. Create a presentation only from the student's stored StudySphere data "
-        + "and relevant uploaded-document passages. Do not add outside facts. Keep slide text concise. Never invent citations. "
-        + "Return ONLY valid JSON matching the requested schema. No Markdown fences, no commentary. "
+        + "You are StudySphere Presentation Designer. Create a complete PowerPoint outline only from the student's stored StudySphere data "
+        + "and relevant uploaded-document passages. Do not add outside facts. Every factual statement, definition, example, recommendation, "
+        + "date, or claim in the deck must be supported by the supplied context. Keep slide text concise. Never invent citations. "
+        + "Return only the requested JSON object. Do not use Markdown fences or commentary. "
     )
     source_block = ("\n\nRelevant uploaded study material:\n" + rag_context) if rag_context else ""
     stored_context = academic_context_for_chat(auth_id, rag_context)
     user_text = (
-        f"Create a complete {slide_count}-content-slide presentation (plus title and closing slides) from this prompt:\n\n"
-        f"{prompt_text.strip()}\n\n"
+        f"Create a complete {int(slide_count)}-content-slide presentation (plus title and closing slides) from this prompt:\n\n"
+        f"{str(prompt_text).strip()}\n\n"
         f"Audience: {audience}\nTone: {tone}\nVisual theme: {theme_name}\n"
-        f"Speaker notes requested: {'yes' if use_notes else 'no'}\n"
-        "Make the deck understandable even when the audience only sees the slides. "
-        "For process/timeline slides, use the 'steps' array. For comparisons, use two_column. "
-        "For a strong key message, use quote. Keep titles short.\n\n"
-        f"JSON schema:\n{json.dumps(schema, ensure_ascii=False)}"
-        + "\n\nStudySphere stored context (the only allowed factual source):\n"
+        f"Speaker-note guidance requested: {'yes' if use_notes else 'no'}\n\n"
+        "Use the 'steps' array for a process/timeline, 'two_column' for a comparison, and 'quote' only when a key message is directly supported by the stored context. "
+        "Do not use any outside knowledge to fill missing information. Keep bullet points short.\n\n"
+        "StudySphere stored context (the only allowed factual source):\n"
         + stored_context
         + source_block
     )
 
-    models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
-    last_error = "Presentation generation failed."
-    for model in models:
-        payload = {
+    models = _available_gemini_generation_models(api_key)
+    errors = []
+
+    for model in models[:10]:
+        structured_payload = {
             "contents": [{"role": "user", "parts": [{"text": user_text}]}],
             "systemInstruction": {"parts": [{"text": system_text}]},
-            "generationConfig": {"temperature": 0.45, "maxOutputTokens": 6500},
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 9000,
+                "responseFormat": {
+                    "text": {
+                        "mimeType": "application/json",
+                        "schema": schema,
+                    }
+                },
+            },
         }
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=90) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            candidates = data.get("candidates") or []
-            parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-            raw = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
-            deck = _presentation_json_from_text(raw)
-            deck["slides"] = list(deck.get("slides") or [])[:slide_count]
-            if not deck["slides"]:
-                raise ValueError("The generated deck contained no slides.")
-            return deck, ""
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                last_error = "The selected Gemini model is unavailable for this project."
-                continue
-            if exc.code == 429:
-                return None, "Gemini rate limit reached. Please try again in a little while."
+
+        plain_payload = {
+            "contents": [{"role": "user", "parts": [{"text": user_text + "\n\nReturn valid JSON only, with no Markdown fences."}]}],
+            "systemInstruction": {"parts": [{"text": system_text}]},
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 9000,
+            },
+        }
+
+        for payload in (structured_payload, plain_payload):
+            request = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                method="POST",
+            )
             try:
-                detail = exc.read().decode("utf-8", errors="ignore")
-                parsed = json.loads(detail)
-                message = ((parsed.get("error") or {}).get("message") or "Gemini request failed.")
-            except Exception:
-                message = "Gemini request failed."
-            return None, message
-        except Exception as exc:
-            last_error = str(exc)
-            continue
-    return None, last_error
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    feedback = data.get("promptFeedback") or {}
+                    block_reason = feedback.get("blockReason")
+                    raise ValueError(f"Gemini returned no candidate{f': {block_reason}' if block_reason else '.'}")
+                parts = ((candidates[0].get("content") or {}).get("parts") or [])
+                raw = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+                deck = _presentation_json_from_text(raw)
+                return _normalize_presentation_deck(deck, int(slide_count)), ""
+            except urllib.error.HTTPError as exc:
+                try:
+                    detail = exc.read().decode("utf-8", errors="ignore")
+                    parsed = json.loads(detail)
+                    api_message = str(((parsed.get("error") or {}).get("message") or "Gemini request failed.")).strip()
+                except Exception:
+                    api_message = "Gemini request failed."
+                errors.append(f"{model} ({exc.code}): {api_message}")
+                if exc.code == 429:
+                    return None, "Gemini rate limit reached. Please try again in a little while."
+                if exc.code in {400, 404, 500, 503}:
+                    continue
+            except Exception as exc:
+                errors.append(f"{model}: {type(exc).__name__}: {exc}")
+                continue
+
+    useful = errors[-1] if errors else "No Gemini model was available."
+    return None, f"Presentation generation failed. {useful}"
 
 def _document_plain_text_from_bytes(file_bytes, file_name):
     name = str(file_name or "").lower()
