@@ -679,8 +679,64 @@ input:focus, textarea:focus {
 /* Success / warning messages */
 [data-testid="stAlert"] { border-radius:13px !important; }
 
-/* Better dark-mode visibility for built-in elements */
-[data-baseweb="popover"] *, [role="option"] * { color:var(--ss-text) !important; }
+/* Dropdowns / select menus — explicit light/dark contrast */
+div[data-baseweb="select"] > div {
+  background:var(--ss-surface) !important;
+  color:var(--ss-text) !important;
+  border-color:var(--ss-border) !important;
+}
+div[data-baseweb="select"] input,
+div[data-baseweb="select"] [role="combobox"],
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] svg {
+  color:var(--ss-text) !important;
+  fill:var(--ss-text) !important;
+}
+
+/* Streamlit/BaseWeb renders the open menu in a portal outside the main app. */
+div[data-baseweb="popover"] {
+  background:transparent !important;
+  z-index:999999 !important;
+}
+div[data-baseweb="popover"] > div {
+  background:var(--ss-surface) !important;
+  border:1px solid var(--ss-border) !important;
+  box-shadow:0 18px 40px rgba(0,0,0,.24) !important;
+}
+div[data-baseweb="popover"] [role="listbox"] {
+  background:var(--ss-surface) !important;
+  color:var(--ss-text) !important;
+}
+div[data-baseweb="popover"] [role="option"] {
+  background:var(--ss-surface) !important;
+  color:var(--ss-text) !important;
+  cursor:pointer !important;
+}
+div[data-baseweb="popover"] [role="option"] > div,
+div[data-baseweb="popover"] [role="option"] span,
+div[data-baseweb="popover"] [role="option"] p {
+  color:var(--ss-text) !important;
+}
+div[data-baseweb="popover"] [role="option"]:hover {
+  background:var(--ss-surface-2) !important;
+  color:var(--ss-text) !important;
+}
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] {
+  background:var(--ss-primary-soft) !important;
+  color:var(--ss-primary) !important;
+}
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] > div,
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] span,
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] p {
+  color:var(--ss-primary) !important;
+}
+
+/* Dark-mode specific dropdown surface */
+html[data-theme="dark"] div[data-baseweb="popover"] > div,
+body div[data-baseweb="popover"] > div {
+  border-color:var(--ss-border) !important;
+}
+
 
 </style>
 """.replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#7C3AED" if not dark_mode else "#A78BFA").replace("__PRIMARY_HOVER__", "#6D28D9" if not dark_mode else "#8B5CF6").replace("__PRIMARY_SOFT__", "rgba(124,58,237,.10)" if not dark_mode else "rgba(167,139,250,.14)").replace("__ACCENT__", "#F97316" if not dark_mode else "#FB923C").replace("__ACCENT_SOFT__", "rgba(249,115,22,.12)" if not dark_mode else "rgba(251,146,60,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
