@@ -690,6 +690,147 @@ footer {{ visibility:hidden; }}
 .dashboard-ai-badge {{ flex-shrink:0; padding:8px 11px; border-radius:999px; background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14); color:#CCFBF1 !important; font-size:10px; font-weight:800; }}
 @media (max-width:900px) {{ .dashboard-hero {{ grid-template-columns:1fr; padding:25px; }} .dashboard-orbit {{ min-height:145px; }} .dashboard-hero-title {{ font-size:29px; }} .dashboard-ai-banner {{ align-items:flex-start; flex-direction:column; }} }}
 
+
+/* ============================================================
+   STUDYSPHERE ELITE UI — FINAL DESIGN OVERRIDES
+   ============================================================ */
+body {{ scroll-behavior:smooth; }}
+[data-testid="stToolbar"], [data-testid="stDecoration"] {{ display:none !important; }}
+.main .block-container {{ max-width:1540px !important; padding:1.15rem 2.4rem 3.5rem !important; }}
+
+/* Sidebar */
+[data-testid="stSidebar"] {{
+  background:linear-gradient(180deg,{sidebar_bg},{bg}) !important;
+  box-shadow:16px 0 48px rgba(15,23,42,.05) !important;
+}}
+[data-testid="stSidebarContent"] {{ padding:1rem .72rem 1rem !important; }}
+[data-testid="stSidebar"] .brand {{ padding:.55rem .42rem 1.18rem !important; }}
+[data-testid="stSidebar"] .brand-name {{ font-size:24px; letter-spacing:-1px; }}
+[data-testid="stSidebar"] .logo {{
+  position:relative; overflow:hidden;
+  box-shadow:0 11px 28px rgba(20,184,166,.24) !important;
+}}
+[data-testid="stSidebar"] .logo::after {{
+  content:""; position:absolute; width:70px; height:70px; top:-44px; right:-28px;
+  border-radius:50%; background:rgba(255,255,255,.18);
+}}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div > label {{
+  border-radius:12px !important; padding:7px 9px !important; transition:.18s ease !important;
+}}
+[data-testid="stSidebar"] [data-testid="stRadio"] > div > label:hover {{
+  background:rgba(20,184,166,.08) !important; transform:translateX(2px);
+}}
+
+/* Global controls */
+div.stButton > button {{
+  min-height:44px !important; border-radius:13px !important;
+  background:linear-gradient(135deg,#14B8A6,#0F766E) !important;
+  border:1px solid rgba(20,184,166,.22) !important;
+  box-shadow:0 8px 18px rgba(20,184,166,.13) !important;
+  transition:transform .18s ease, box-shadow .18s ease !important;
+}}
+div.stButton > button:hover {{
+  background:linear-gradient(135deg,#2DD4BF,#0F766E) !important;
+  transform:translateY(-2px) !important;
+  box-shadow:0 13px 25px rgba(20,184,166,.21) !important;
+}}
+
+/* Hero */
+.elite-page {{ animation:floatIn .42s ease-out; }}
+.elite-hero {{
+  position:relative; overflow:hidden; display:grid;
+  grid-template-columns:minmax(0,1.5fr) minmax(260px,.75fr); gap:14px;
+  min-height:275px; padding:34px; border-radius:30px;
+  background:
+    radial-gradient(circle at 80% 20%,rgba(45,212,191,.24),transparent 22%),
+    radial-gradient(circle at 20% 115%,rgba(96,165,250,.15),transparent 27%),
+    linear-gradient(135deg,#082C39,#0F766E 57%,#123047);
+  box-shadow:0 26px 62px rgba(15,118,110,.19);
+}}
+.elite-hero:before {{
+  content:""; position:absolute; width:390px; height:390px; right:-155px; top:-195px;
+  border-radius:50%; border:1px solid rgba(255,255,255,.10);
+  box-shadow:0 0 0 30px rgba(255,255,255,.02),0 0 0 60px rgba(255,255,255,.014);
+}}
+.elite-copy {{ position:relative; z-index:2; align-self:center; }}
+.elite-kicker {{ color:#99F6E4 !important; font-size:10px; font-weight:900; letter-spacing:1.75px; text-transform:uppercase; }}
+.elite-title {{ color:white !important; font-size:43px; line-height:1.04; letter-spacing:-1.7px; font-weight:900; margin-top:9px; }}
+.elite-title span {{ color:#5EEAD4 !important; }}
+.elite-sub {{ color:rgba(255,255,255,.77) !important; font-size:13px; line-height:1.75; margin-top:12px; max-width:710px; }}
+.elite-pills {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }}
+.elite-pill {{ padding:8px 11px; border-radius:999px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.08); color:white !important; font-size:10px; font-weight:750; }}
+.elite-orbit {{ position:relative; min-height:215px; display:flex; align-items:center; justify-content:center; z-index:2; }}
+.elite-orbit-ring {{ position:absolute; width:184px; height:184px; border-radius:50%; border:1px solid rgba(255,255,255,.12); box-shadow:0 0 0 26px rgba(255,255,255,.02); }}
+.elite-orbit-ring.small {{ width:128px; height:128px; border-color:rgba(94,234,212,.20); box-shadow:none; }}
+.elite-orbit-core {{ width:92px; height:92px; border-radius:28px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#5EEAD4,#14B8A6); color:#063B3A !important; font-size:38px; box-shadow:0 19px 36px rgba(0,0,0,.22); animation:ssFloat 4s ease-in-out infinite; }}
+.elite-orbit-dot {{ position:absolute; width:9px; height:9px; border-radius:50%; background:#99F6E4; box-shadow:0 0 0 7px rgba(153,246,228,.08),0 0 22px rgba(153,246,228,.42); }}
+.elite-orbit-dot.one {{ top:18%; right:25%; }}
+.elite-orbit-dot.two {{ bottom:17%; left:17%; width:7px; height:7px; background:#93C5FD; box-shadow:0 0 0 7px rgba(147,197,253,.08),0 0 20px rgba(147,197,253,.32); }}
+
+/* KPI cards */
+.elite-kpi-grid {{ margin-top:18px; }}
+.elite-kpi {{ position:relative; overflow:hidden; min-height:146px; padding:20px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 32px rgba(15,23,42,.05); transition:.2s ease; }}
+.elite-kpi:hover {{ transform:translateY(-4px); border-color:rgba(20,184,166,.34); box-shadow:0 20px 42px rgba(15,23,42,.08); }}
+.elite-kpi:after {{ content:""; position:absolute; width:112px; height:112px; right:-58px; bottom:-63px; border-radius:50%; background:rgba(20,184,166,.07); }}
+.elite-kpi-top {{ display:flex; align-items:center; justify-content:space-between; }}
+.elite-kpi-icon {{ width:43px; height:43px; border-radius:14px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#DDFBF7,#C8F7F1); font-size:20px; }}
+.elite-kpi-label {{ color:{muted} !important; font-size:10px; font-weight:850; letter-spacing:.6px; margin-top:15px; }}
+.elite-kpi-value {{ color:{text} !important; font-size:33px; line-height:1; font-weight:900; letter-spacing:-1.3px; margin-top:8px; }}
+.elite-kpi-foot {{ color:{muted} !important; font-size:10px; margin-top:6px; }}
+
+/* Sections and actions */
+.elite-section {{ margin-top:25px; }}
+.elite-section-head {{ display:flex; justify-content:space-between; align-items:flex-end; gap:15px; margin-bottom:11px; }}
+.elite-section-title {{ color:{text} !important; font-size:18px; font-weight:900; letter-spacing:-.45px; }}
+.elite-section-sub {{ color:{muted} !important; font-size:11px; margin-top:3px; }}
+.elite-action-shell {{ padding:8px; border-radius:24px; background:{card}; border:1px solid {border}; box-shadow:0 15px 35px rgba(15,23,42,.045); }}
+.elite-action-shell [data-testid="column"] {{ padding:4px; }}
+.elite-action-shell div.stButton > button {{ min-height:112px !important; text-align:left !important; justify-content:flex-start !important; align-items:flex-start !important; padding:18px !important; border-radius:17px !important; background:{card2} !important; border:1px solid {border} !important; color:{text} !important; box-shadow:none !important; }}
+.elite-action-shell div.stButton > button:hover {{ background:linear-gradient(145deg,{card2},{card}) !important; border-color:rgba(20,184,166,.35) !important; box-shadow:0 12px 24px rgba(15,23,42,.07) !important; }}
+.elite-action-shell div.stButton > button p, .elite-action-shell div.stButton > button span {{ color:{text} !important; font-size:13px !important; font-weight:850 !important; }}
+
+/* Panels */
+.elite-panel {{ background:{card}; border:1px solid {border}; border-radius:23px; padding:21px; box-shadow:0 15px 36px rgba(15,23,42,.05); }}
+.elite-panel-title {{ color:{text} !important; font-size:16px; font-weight:900; }}
+.elite-panel-sub {{ color:{muted} !important; font-size:10px; margin-top:4px; }}
+.elite-focus-row {{ display:flex; align-items:center; gap:11px; padding:12px 0; border-bottom:1px solid {border}; }}
+.elite-focus-row:last-child {{ border-bottom:0; }}
+.elite-focus-icon {{ width:35px; height:35px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:{card2}; border:1px solid {border}; flex-shrink:0; }}
+.elite-focus-main {{ flex:1; min-width:0; }}
+.elite-focus-name {{ color:{text} !important; font-size:12px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.elite-focus-detail {{ color:{muted} !important; font-size:10px; margin-top:2px; }}
+.elite-focus-badge {{ flex-shrink:0; padding:5px 8px; border-radius:999px; background:rgba(20,184,166,.08); color:#0F766E !important; border:1px solid rgba(20,184,166,.14); font-size:9px; font-weight:900; }}
+
+/* Progress */
+.elite-progress {{ display:grid; grid-template-columns:145px 1fr; gap:22px; align-items:center; }}
+.elite-ring {{ width:126px; height:126px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:conic-gradient(#14B8A6 calc(var(--progress) * 1%), {border} 0); position:relative; }}
+.elite-ring:before {{ content:""; width:94px; height:94px; border-radius:50%; background:{card}; position:absolute; }}
+.elite-ring-text {{ position:relative; z-index:1; color:{text} !important; font-size:25px; font-weight:900; }}
+.elite-progress-copy h4 {{ color:{text} !important; font-size:14px; font-weight:900; margin:0; }}
+.elite-progress-copy p {{ color:{muted} !important; font-size:10px; line-height:1.6; margin-top:5px; }}
+.elite-mini-bar {{ height:8px; margin-top:10px; border-radius:999px; background:{border}; overflow:hidden; }}
+.elite-mini-fill {{ height:100%; border-radius:999px; background:linear-gradient(90deg,#14B8A6,#5EEAD4); }}
+
+/* AI banner */
+.elite-ai {{ position:relative; overflow:hidden; display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:24px; padding:23px 25px; border-radius:22px; background:linear-gradient(135deg,#082E3A,#0F766E 56%,#123047); border:1px solid rgba(94,234,212,.18); box-shadow:0 21px 44px rgba(15,118,110,.16); }}
+.elite-ai:after {{ content:""; position:absolute; right:-75px; top:-90px; width:220px; height:220px; border-radius:50%; border:1px solid rgba(255,255,255,.08); box-shadow:0 0 0 25px rgba(255,255,255,.018),0 0 0 50px rgba(255,255,255,.012); }}
+.elite-ai-copy {{ position:relative; z-index:2; }}
+.elite-ai-title {{ color:white !important; font-size:17px; font-weight:900; }}
+.elite-ai-sub {{ color:rgba(255,255,255,.72) !important; font-size:11px; line-height:1.6; margin-top:4px; }}
+.elite-ai-badge {{ position:relative; z-index:2; flex-shrink:0; padding:8px 11px; border-radius:999px; color:#CCFBF1 !important; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); font-size:10px; font-weight:850; }}
+
+/* Better Streamlit data tables */
+[data-testid="stDataFrame"] {{ border-radius:15px !important; overflow:hidden !important; border:1px solid {border} !important; box-shadow:0 8px 20px rgba(15,23,42,.035); }}
+
+@media (max-width:950px) {{
+  .elite-hero {{ grid-template-columns:1fr; padding:25px; }}
+  .elite-orbit {{ min-height:155px; }}
+  .elite-title {{ font-size:31px; }}
+  .elite-progress {{ grid-template-columns:1fr; justify-items:center; text-align:center; }}
+  .elite-ai {{ align-items:flex-start; flex-direction:column; }}
+  .main .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
+}}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1467,9 +1608,8 @@ pending_task_count = cursor.fetchone()[0]
 
 
 if st.session_state.page == 1:
-    st.markdown('<div class="dashboard-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="elite-page">', unsafe_allow_html=True)
     first_name = DISPLAY_NAME.split()[0] if DISPLAY_NAME.strip() else "Student"
-
     today_text = str(date.today())
     upcoming_assignments = cursor.execute(
         "SELECT title, deadline, priority, status FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 6",
@@ -1480,60 +1620,39 @@ if st.session_state.page == 1:
         (AUTH_ID, today_text),
     ).fetchall()
     focus_tasks = cursor.execute(
-        "SELECT tasks.title, tasks.task_date, tasks.duration, tasks.priority, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id WHERE tasks.user_id = ? AND tasks.completed = 0 ORDER BY tasks.task_date LIMIT 5",
+        "SELECT tasks.title, tasks.task_date, tasks.duration, tasks.priority, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id WHERE tasks.user_id = ? AND tasks.completed = 0 ORDER BY CASE tasks.priority WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, tasks.task_date LIMIT 5",
         (AUTH_ID,),
     ).fetchall()
-    completed_tasks = cursor.execute(
-        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1",
-        (AUTH_ID,),
-    ).fetchone()[0]
-    total_tasks = cursor.execute(
-        "SELECT COUNT(*) FROM tasks WHERE user_id = ?",
-        (AUTH_ID,),
-    ).fetchone()[0]
+    completed_tasks = cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1", (AUTH_ID,)).fetchone()[0]
+    total_tasks = cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (AUTH_ID,)).fetchone()[0]
     task_progress = int((completed_tasks / total_tasks) * 100) if total_tasks else 0
 
     st.markdown(
-        f'''
-<div class="dashboard-hero">
-  <div class="dashboard-hero-copy">
-    <div class="dashboard-hero-kicker">Personal academic command center</div>
-    <div class="dashboard-hero-title">Good morning, {first_name} 👋</div>
-    <div class="dashboard-hero-sub">Your study life is all in one place — deadlines, exams, subjects and daily focus. Pick a destination below and keep moving.</div>
-    <div class="dashboard-hero-meta">
-      <span class="dashboard-pill">✦ Today • {today_text}</span>
-      <span class="dashboard-pill">🎓 Student workspace</span>
-      <span class="dashboard-pill">⚡ {pending_task_count} tasks waiting</span>
-    </div>
+        f'''<div class="elite-hero">
+  <div class="elite-copy">
+    <div class="elite-kicker">Personal academic command center</div>
+    <div class="elite-title">Good morning, <span>{first_name}</span> 👋</div>
+    <div class="elite-sub">A calm, focused workspace for your subjects, deadlines, exams and daily study goals. Everything important is visible without the clutter.</div>
+    <div class="elite-pills"><span class="elite-pill">✦ {today_text}</span><span class="elite-pill">🎓 Student workspace</span><span class="elite-pill">⚡ {pending_task_count} open tasks</span></div>
   </div>
-  <div class="dashboard-orbit" aria-hidden="true">
-    <div class="orbit-ring"></div>
-    <div class="orbit-ring orbit-ring-small"></div>
-    <div class="orbit-core">🎓</div>
-    <span class="orbit-dot orbit-dot-one"></span>
-    <span class="orbit-dot orbit-dot-two"></span>
-  </div>
-</div>
-''',
-        unsafe_allow_html=True,
-    )
+  <div class="elite-orbit" aria-hidden="true"><div class="elite-orbit-ring"></div><div class="elite-orbit-ring small"></div><div class="elite-orbit-core">🎓</div><span class="elite-orbit-dot one"></span><span class="elite-orbit-dot two"></span></div>
+</div>''', unsafe_allow_html=True)
 
-    st.markdown('<div class="dashboard-stat-grid">', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">📚</div><div class="dashboard-stat-value">{subject_count}</div><div class="dashboard-stat-label">Your Subjects</div><div class="dashboard-stat-foot">Courses in your workspace</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">📝</div><div class="dashboard-stat-value">{assignment_count}</div><div class="dashboard-stat-label">Assignments</div><div class="dashboard-stat-foot">Deadlines to keep in view</div></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">🎯</div><div class="dashboard-stat-value">{exam_count}</div><div class="dashboard-stat-label">Upcoming Exams</div><div class="dashboard-stat-foot">Future exam dates</div></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">✓</div><div class="dashboard-stat-value">{pending_task_count}</div><div class="dashboard-stat-label">Pending Tasks</div><div class="dashboard-stat-foot">Study actions still open</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="elite-kpi-grid">', unsafe_allow_html=True)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">📚</div></div><div class="elite-kpi-label">YOUR SUBJECTS</div><div class="elite-kpi-value">{subject_count}</div><div class="elite-kpi-foot">Courses currently organized</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">📝</div></div><div class="elite-kpi-label">ASSIGNMENTS</div><div class="elite-kpi-value">{assignment_count}</div><div class="elite-kpi-foot">Deadlines in your workspace</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">🎯</div></div><div class="elite-kpi-label">UPCOMING EXAMS</div><div class="elite-kpi-value">{exam_count}</div><div class="elite-kpi-foot">Future exam dates</div></div>', unsafe_allow_html=True)
+    k4.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">✓</div></div><div class="elite-kpi-label">PENDING TASKS</div><div class="elite-kpi-value">{pending_task_count}</div><div class="elite-kpi-foot">Study actions still open</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Quick actions</div><div class="dashboard-section-sub">One click takes you exactly where you need to go.</div></div></div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="dashboard-action-panel">', unsafe_allow_html=True)
-    q1, q2, q3, q4 = st.columns(4)
-    go_ai = q1.button("🤖  Ask AI Tutor", key="dash_action_ai", use_container_width=True)
-    go_subjects = q2.button("📚  Manage Subjects", key="dash_action_subjects", use_container_width=True)
-    go_exams = q3.button("🎯  Exam Focus", key="dash_action_exams", use_container_width=True)
-    go_planner = q4.button("⚡  Study Planner", key="dash_action_planner", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Quick actions</div><div class="elite-section-sub">Your most-used StudySphere destinations, one click away.</div></div></div><div class="elite-action-shell">', unsafe_allow_html=True)
+    a1, a2, a3, a4 = st.columns(4)
+    go_ai = a1.button("🤖  Ask AI Tutor\nGet help with difficult topics", key="elite_dash_ai", use_container_width=True)
+    go_subjects = a2.button("📚  Manage Subjects\nOrganize your courses", key="elite_dash_subjects", use_container_width=True)
+    go_exams = a3.button("🎯  Exam Focus\nView upcoming exams", key="elite_dash_exams", use_container_width=True)
+    go_planner = a4.button("⚡  Study Planner\nBuild today's focus", key="elite_dash_planner", use_container_width=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
     if go_ai:
         st.session_state.page = 7
@@ -1548,51 +1667,46 @@ if st.session_state.page == 1:
         st.session_state.page = 5
         st.rerun()
 
-    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Today at a glance</div><div class="dashboard-section-sub">A cleaner view of what deserves your attention.</div></div></div></div>', unsafe_allow_html=True)
-    focus_col, progress_col = st.columns([1.7, 1])
-
+    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Today at a glance</div><div class="elite-section-sub">See what needs your attention and how far you have progressed.</div></div></div>', unsafe_allow_html=True)
+    focus_col, progress_col = st.columns([1.55, 1])
     with focus_col:
-        st.markdown('<div class="dashboard-focus">', unsafe_allow_html=True)
-        st.markdown('<div class="dashboard-section-title">🔥 Priority queue</div><div class="dashboard-section-sub">Your next unfinished study actions.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="elite-panel"><div class="elite-panel-title">🔥 Priority queue</div><div class="elite-panel-sub">Unfinished tasks are ordered by priority first.</div>', unsafe_allow_html=True)
         if focus_tasks:
             for task_title_value, task_day, task_minutes, task_priority_value, task_subject_value in focus_tasks:
-                task_subject_text = task_subject_value or "General"
-                priority_text = str(task_priority_value or "Medium")
-                st.markdown(f'<div class="focus-row"><div class="focus-icon">📖</div><div class="focus-main"><div class="focus-name">{task_title_value}</div><div class="focus-detail">{task_subject_text} • {task_day} • {task_minutes} min</div></div><div class="focus-badge">{priority_text}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="elite-focus-row"><div class="elite-focus-icon">📖</div><div class="elite-focus-main"><div class="elite-focus-name">{task_title_value}</div><div class="elite-focus-detail">{task_subject_value or "General"} • {task_day} • {task_minutes} min</div></div><div class="elite-focus-badge">{task_priority_value or "Medium"}</div></div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">🎉 You have no unfinished study tasks. Add a task in the Study Planner when you are ready.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">🎉 You are all caught up. Add a study task whenever you are ready.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-
     with progress_col:
-        st.markdown('<div class="dashboard-progress">', unsafe_allow_html=True)
-        st.markdown('<div class="dashboard-section-title">📈 Task progress</div><div class="dashboard-section-sub">A simple snapshot of your completion pace.</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="progress-ring" style="--progress:{task_progress};"><div class="progress-ring-value">{task_progress}%</div></div><div class="progress-detail">{completed_tasks} of {total_tasks} study tasks completed</div>', unsafe_allow_html=True)
+        st.markdown('<div class="elite-panel"><div class="elite-panel-title">📈 Study progress</div><div class="elite-panel-sub">Your current task completion pace.</div><div style="height:14px"></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="elite-progress"><div class="elite-ring" style="--progress:{task_progress};"><div class="elite-ring-text">{task_progress}%</div></div><div class="elite-progress-copy"><h4>{completed_tasks} of {total_tasks} tasks complete</h4><p>Small, consistent progress compounds. Finish your next task and keep your momentum going.</p><div class="elite-mini-bar"><div class="elite-mini-fill" style="width:{task_progress}%;"></div></div></div></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Deadlines & exam radar</div><div class="dashboard-section-sub">The next items already saved in your workspace.</div></div></div></div>', unsafe_allow_html=True)
-    left, right = st.columns(2)
-
-    with left:
-        st.markdown('<div class="panel"><div class="panel-title">📝 Upcoming Assignments</div><div class="panel-sub">Your nearest assignment deadlines.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Deadlines & exam radar</div><div class="elite-section-sub">The next academic items saved to your account.</div></div></div>', unsafe_allow_html=True)
+    d1, d2 = st.columns(2)
+    with d1:
+        st.markdown('<div class="elite-panel"><div class="elite-panel-title">📝 Upcoming assignments</div><div class="elite-panel-sub">Your nearest assignment deadlines.</div>', unsafe_allow_html=True)
         if upcoming_assignments:
             st.dataframe(upcoming_assignments, use_container_width=True, hide_index=True, column_config={"title":"Assignment","deadline":"Deadline","priority":"Priority","status":"Status"})
         else:
-            st.markdown('<div class="dashboard-empty">🎉 No assignments yet. Add your first assignment to start tracking your work.</div>', unsafe_allow_html=True)
-
-    with right:
-        st.markdown('<div class="panel"><div class="panel-title">🎯 Upcoming Exams</div><div class="panel-sub">Your next exam dates and subjects.</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">No assignments yet. Add your first one to start tracking deadlines.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with d2:
+        st.markdown('<div class="elite-panel"><div class="elite-panel-title">🎯 Upcoming exams</div><div class="elite-panel-sub">Your next exam dates and subjects.</div>', unsafe_allow_html=True)
         if upcoming_exams:
             exam_rows = [(row[0], row[1], row[2] or "General") for row in upcoming_exams]
             st.dataframe(exam_rows, use_container_width=True, hide_index=True, column_config={"title":"Exam","exam_date":"Exam Date","name":"Subject"})
         else:
-            st.markdown('<div class="dashboard-empty">🎯 No upcoming exams have been added yet.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">No upcoming exams have been added yet.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="dashboard-ai-banner"><div class="dashboard-ai-copy"><div class="dashboard-ai-title">🤖 Your academic AI is ready</div><div class="dashboard-ai-sub">Ask questions, review your workload, or build a focused plan using your StudySphere data.</div></div><div class="dashboard-ai-badge">Connected • Gemini</div></div>', unsafe_allow_html=True)
-    open_ai = st.button("Open AI Agent", key="dash_open_ai", use_container_width=True)
+    st.markdown('<div class="elite-ai"><div class="elite-ai-copy"><div class="elite-ai-title">🤖 Your StudySphere AI is ready</div><div class="elite-ai-sub">Ask questions, analyze your workload, or build a focused plan using the academic data already inside your account.</div></div><div class="elite-ai-badge">Connected • Gemini</div></div>', unsafe_allow_html=True)
+    open_ai = st.button("Open AI Agent", key="elite_dash_open_ai", use_container_width=True)
     if open_ai:
         st.session_state.page = 7
         st.rerun()
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 2:
