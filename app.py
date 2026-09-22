@@ -622,6 +622,74 @@ footer {{ visibility:hidden; }}
   .chat-brand {{ font-size:21px; }}
 }}
 
+
+/* ============================================================
+   EXECUTIVE DASHBOARD / UX POLISH
+   ============================================================ */
+.dashboard-wrap {{ animation:floatIn .48s ease-out; }}
+.dashboard-hero {{
+  position:relative; overflow:hidden; display:grid;
+  grid-template-columns:minmax(0,1.7fr) minmax(250px,.75fr); gap:24px; align-items:stretch;
+  min-height:255px; padding:32px; border-radius:28px; margin-bottom:20px;
+  background:radial-gradient(circle at 78% 18%,rgba(45,212,191,.30),transparent 20%),radial-gradient(circle at 96% 72%,rgba(59,130,246,.20),transparent 24%),linear-gradient(135deg,#0B5F59 0%,#0F766E 46%,#10233A 100%);
+  box-shadow:0 24px 55px rgba(15,118,110,.20);
+}}
+.dashboard-hero::before {{
+  content:""; position:absolute; width:420px; height:420px; right:-175px; top:-235px; border-radius:50%;
+  border:1px solid rgba(255,255,255,.10); box-shadow:0 0 0 34px rgba(255,255,255,.025),0 0 0 68px rgba(255,255,255,.018);
+}}
+.dashboard-hero-copy {{ position:relative; z-index:2; align-self:center; }}
+.dashboard-hero-kicker {{ color:#99F6E4 !important; font-size:10px; font-weight:850; letter-spacing:1.6px; text-transform:uppercase; }}
+.dashboard-hero-title {{ color:white !important; font-size:38px; font-weight:880; line-height:1.08; letter-spacing:-1.35px; margin-top:8px; max-width:760px; }}
+.dashboard-hero-sub {{ color:rgba(255,255,255,.80) !important; font-size:13px; line-height:1.7; max-width:720px; margin-top:10px; }}
+.dashboard-hero-meta {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:17px; }}
+.dashboard-pill {{ display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.15); color:white !important; font-size:10px; font-weight:700; backdrop-filter:blur(10px); }}
+.dashboard-orbit {{ position:relative; min-height:190px; display:flex; align-items:center; justify-content:center; z-index:2; }}
+.orbit-ring {{ position:absolute; width:178px; height:178px; border-radius:50%; border:1px solid rgba(255,255,255,.11); box-shadow:0 0 0 20px rgba(255,255,255,.02),inset 0 0 25px rgba(45,212,191,.04); }}
+.orbit-ring-small {{ width:124px; height:124px; border-color:rgba(45,212,191,.21); }}
+.orbit-core {{ width:78px; height:78px; border-radius:24px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#2DD4BF,#14B8A6); color:white !important; font-size:34px; box-shadow:0 16px 34px rgba(0,0,0,.20); animation:ssFloat 3.8s ease-in-out infinite; }}
+.orbit-dot {{ position:absolute; width:9px; height:9px; border-radius:50%; background:#99F6E4; box-shadow:0 0 0 7px rgba(153,246,228,.08),0 0 18px rgba(153,246,228,.35); }}
+.orbit-dot-one {{ top:12%; right:25%; }}
+.orbit-dot-two {{ bottom:15%; left:18%; width:7px; height:7px; background:#93C5FD; box-shadow:0 0 0 7px rgba(147,197,253,.08),0 0 18px rgba(147,197,253,.28); }}
+.dashboard-stat-grid {{ margin-bottom:8px; }}
+.dashboard-stat {{ position:relative; overflow:hidden; min-height:146px; padding:20px; border-radius:20px; background:{card}; border:1px solid {border}; box-shadow:0 12px 28px rgba(15,23,42,.045); transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease; }}
+.dashboard-stat:hover {{ transform:translateY(-4px); border-color:rgba(20,184,166,.36); box-shadow:0 18px 34px rgba(15,23,42,.075); }}
+.dashboard-stat::after {{ content:""; position:absolute; width:100px; height:100px; right:-46px; bottom:-55px; border-radius:50%; background:rgba(20,184,166,.07); }}
+.dashboard-stat-label {{ color:{muted} !important; font-size:11px; font-weight:750; }}
+.dashboard-stat-value {{ color:{text} !important; font-size:31px; font-weight:880; letter-spacing:-1px; margin-top:15px; }}
+.dashboard-stat-foot {{ color:{muted} !important; font-size:10px; margin-top:3px; }}
+.dashboard-stat-icon {{ width:41px; height:41px; border-radius:13px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#D9FBF6,#C6F6F0); font-size:20px; box-shadow:inset 0 0 0 1px rgba(20,184,166,.10); }}
+.dashboard-section {{ margin-top:23px; }}
+.dashboard-section-head {{ display:flex; justify-content:space-between; align-items:flex-end; gap:15px; margin-bottom:11px; }}
+.dashboard-section-title {{ color:{text} !important; font-size:18px; font-weight:850; letter-spacing:-.4px; }}
+.dashboard-section-sub {{ color:{muted} !important; font-size:11px; margin-top:3px; }}
+.dashboard-action-panel {{ padding:8px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
+.dashboard-action-panel .stButton {{ margin:0 !important; }}
+.dashboard-action-panel div.stButton > button {{ min-height:104px !important; text-align:left !important; padding:17px 18px !important; border-radius:16px !important; border:1px solid transparent !important; background:linear-gradient(145deg,{card},{card2}) !important; color:{text} !important; box-shadow:none !important; }}
+.dashboard-action-panel div.stButton > button:hover {{ background:linear-gradient(145deg,{card2},{card}) !important; border-color:rgba(20,184,166,.28) !important; transform:translateY(-2px); box-shadow:0 12px 22px rgba(15,23,42,.07) !important; }}
+.dashboard-action-panel div.stButton > button p, .dashboard-action-panel div.stButton > button span {{ color:{text} !important; font-size:13px !important; font-weight:820 !important; }}
+.dashboard-focus {{ position:relative; overflow:hidden; padding:23px; border-radius:22px; background:linear-gradient(145deg,{card},{card2}); border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
+.dashboard-focus::after {{ content:""; position:absolute; width:180px; height:180px; right:-100px; top:-90px; border-radius:50%; background:rgba(20,184,166,.07); }}
+.focus-row {{ display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid {border}; }}
+.focus-row:last-child {{ border-bottom:0; }}
+.focus-icon {{ width:34px; height:34px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:{card2}; border:1px solid {border}; flex-shrink:0; }}
+.focus-main {{ min-width:0; flex:1; }}
+.focus-name {{ color:{text} !important; font-size:12px; font-weight:780; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.focus-detail {{ color:{muted} !important; font-size:10px; margin-top:2px; }}
+.focus-badge {{ padding:5px 8px; border-radius:999px; font-size:9px; font-weight:800; background:rgba(20,184,166,.09); color:#0F766E !important; border:1px solid rgba(20,184,166,.15); white-space:nowrap; }}
+.dashboard-progress {{ padding:23px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
+.progress-ring {{ width:116px; height:116px; border-radius:50%; margin:2px auto 0; display:flex; align-items:center; justify-content:center; background:conic-gradient(#14B8A6 calc(var(--progress) * 1%), {border} 0); position:relative; }}
+.progress-ring::before {{ content:""; width:88px; height:88px; border-radius:50%; background:{card}; position:absolute; }}
+.progress-ring-value {{ position:relative; z-index:1; color:{text} !important; font-size:24px; font-weight:880; }}
+.progress-detail {{ text-align:center; color:{muted} !important; font-size:10px; margin-top:8px; }}
+.dashboard-empty {{ padding:20px; border:1px dashed {border}; border-radius:16px; color:{muted} !important; font-size:11px; background:{card2}; }}
+.dashboard-ai-banner {{ display:flex; align-items:center; justify-content:space-between; gap:18px; padding:21px 23px; border-radius:20px; margin-top:22px; background:linear-gradient(135deg,#0F766E,#115E59 54%,#123047); border:1px solid rgba(94,234,212,.18); box-shadow:0 18px 36px rgba(15,118,110,.16); }}
+.dashboard-ai-copy {{ min-width:0; }}
+.dashboard-ai-title {{ color:white !important; font-size:16px; font-weight:850; }}
+.dashboard-ai-sub {{ color:rgba(255,255,255,.72) !important; font-size:11px; line-height:1.55; margin-top:4px; }}
+.dashboard-ai-badge {{ flex-shrink:0; padding:8px 11px; border-radius:999px; background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14); color:#CCFBF1 !important; font-size:10px; font-weight:800; }}
+@media (max-width:900px) {{ .dashboard-hero {{ grid-template-columns:1fr; padding:25px; }} .dashboard-orbit {{ min-height:145px; }} .dashboard-hero-title {{ font-size:29px; }} .dashboard-ai-banner {{ align-items:flex-start; flex-direction:column; }} }}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -1397,80 +1465,135 @@ pending_task_count = cursor.fetchone()[0]
 # PAGES
 # ============================================================
 
+
 if st.session_state.page == 1:
-    st.markdown(
-        f"""
-<div class="hero">
-<div class="hero-kicker">Student command center</div>
-<div class="hero-title">Good morning, {DISPLAY_NAME.split()[0]} 👋</div>
-<div class="hero-text">Everything you need to organize your academic life — subjects, deadlines, exams and daily study tasks — in one focused workspace.</div>
-<div class="hero-pill">✦ Stay organized • Study consistently • Make progress</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="dashboard-wrap">', unsafe_allow_html=True)
+    first_name = DISPLAY_NAME.split()[0] if DISPLAY_NAME.strip() else "Student"
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">📚</div></div><div class="stat-number">{subject_count}</div><div class="stat-label">Your Subjects</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">📝</div></div><div class="stat-number">{assignment_count}</div><div class="stat-label">Assignments</div></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">🎯</div></div><div class="stat-number">{exam_count}</div><div class="stat-label">Upcoming Exams</div></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="stat-card"><div class="stat-top"><div class="stat-icon">✓</div></div><div class="stat-number">{pending_task_count}</div><div class="stat-label">Pending Tasks</div></div>', unsafe_allow_html=True)
-
-    st.markdown('<div style="height:6px"></div><div class="section-kicker">Quick actions</div>', unsafe_allow_html=True)
-    q1, q2, q3, q4 = st.columns(4)
-    q1.markdown('<div class="quick-card"><div class="quick-icon">🤖</div><div class="quick-title">Ask AI Tutor</div><div class="quick-sub">Coming with the AI module</div></div>', unsafe_allow_html=True)
-    q2.markdown('<div class="quick-card"><div class="quick-icon">📚</div><div class="quick-title">Manage Subjects</div><div class="quick-sub">Keep courses organized</div></div>', unsafe_allow_html=True)
-    q3.markdown('<div class="quick-card"><div class="quick-icon">🎯</div><div class="quick-title">Exam Focus</div><div class="quick-sub">Stay ahead of important dates</div></div>', unsafe_allow_html=True)
-    q4.markdown('<div class="quick-card"><div class="quick-icon">⚡</div><div class="quick-title">Study Planner</div><div class="quick-sub">Turn goals into daily tasks</div></div>', unsafe_allow_html=True)
-
-    cursor.execute("SELECT title, deadline, priority, status FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 5", (AUTH_ID,))
-    upcoming_assignments = cursor.fetchall()
-    cursor.execute("SELECT title, exam_date FROM exams WHERE user_id = ? AND exam_date >= ? ORDER BY exam_date LIMIT 5", (AUTH_ID, str(date.today())))
-    upcoming_exams = cursor.fetchall()
-
-    left, right = st.columns(2)
-    with left:
-        st.markdown('<div class="panel"><div class="panel-title">📝 Upcoming Assignments</div><div class="panel-sub">Stay ahead of your deadlines.</div></div>', unsafe_allow_html=True)
-        if upcoming_assignments:
-            st.dataframe(upcoming_assignments, use_container_width=True, hide_index=True, column_config={"title":"Assignment","deadline":"Deadline","priority":"Priority","status":"Status"})
-        else:
-            st.info("🎉 No assignments yet. Add your first assignment to start tracking your work.")
-
-    with right:
-        st.markdown('<div class="panel"><div class="panel-title">📅 Upcoming Exams</div><div class="panel-sub">Keep your exam schedule under control.</div></div>', unsafe_allow_html=True)
-        if upcoming_exams:
-            st.dataframe(upcoming_exams, use_container_width=True, hide_index=True, column_config={"title":"Exam","exam_date":"Exam Date"})
-        else:
-            st.info("🎯 No upcoming exams have been added yet.")
-
-    completed_tasks = cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1", (AUTH_ID,)).fetchone()[0]
-    total_tasks = completed_tasks + pending_task_count
+    today_text = str(date.today())
+    upcoming_assignments = cursor.execute(
+        "SELECT title, deadline, priority, status FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 6",
+        (AUTH_ID,),
+    ).fetchall()
+    upcoming_exams = cursor.execute(
+        "SELECT title, exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exams.exam_date >= ? ORDER BY exams.exam_date LIMIT 6",
+        (AUTH_ID, today_text),
+    ).fetchall()
+    focus_tasks = cursor.execute(
+        "SELECT tasks.title, tasks.task_date, tasks.duration, tasks.priority, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id WHERE tasks.user_id = ? AND tasks.completed = 0 ORDER BY tasks.task_date LIMIT 5",
+        (AUTH_ID,),
+    ).fetchall()
+    completed_tasks = cursor.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1",
+        (AUTH_ID,),
+    ).fetchone()[0]
+    total_tasks = cursor.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ?",
+        (AUTH_ID,),
+    ).fetchone()[0]
     task_progress = int((completed_tasks / total_tasks) * 100) if total_tasks else 0
 
     st.markdown(
-        f"""
-<div class="panel">
-<div class="panel-title">📈 Your Study Overview</div>
-<div class="panel-sub">A quick snapshot of your current academic workspace.</div>
-<div style="margin-top:18px;">
-<div style="display:flex;justify-content:space-between;font-size:12px;color:{muted};"><span>Study tasks completed</span><strong style="color:{text};">{task_progress}%</strong></div>
-<div class="progress-shell"><div class="progress-bar" style="width:{task_progress}%;"></div></div>
+        f'''
+<div class="dashboard-hero">
+  <div class="dashboard-hero-copy">
+    <div class="dashboard-hero-kicker">Personal academic command center</div>
+    <div class="dashboard-hero-title">Good morning, {first_name} 👋</div>
+    <div class="dashboard-hero-sub">Your study life is all in one place — deadlines, exams, subjects and daily focus. Pick a destination below and keep moving.</div>
+    <div class="dashboard-hero-meta">
+      <span class="dashboard-pill">✦ Today • {today_text}</span>
+      <span class="dashboard-pill">🎓 Student workspace</span>
+      <span class="dashboard-pill">⚡ {pending_task_count} tasks waiting</span>
+    </div>
+  </div>
+  <div class="dashboard-orbit" aria-hidden="true">
+    <div class="orbit-ring"></div>
+    <div class="orbit-ring orbit-ring-small"></div>
+    <div class="orbit-core">🎓</div>
+    <span class="orbit-dot orbit-dot-one"></span>
+    <span class="orbit-dot orbit-dot-two"></span>
+  </div>
 </div>
-</div>
-""",
+''',
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        """
-<div class="ai-panel">
-<div class="ai-badge">AI • Next module</div>
-<div class="ai-title">🤖 StudySphere AI Agent</div>
-<div class="ai-text">Your future academic agent will connect your subjects, tasks and exams to help you understand what needs attention and organize your study time more intelligently.</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="dashboard-stat-grid">', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">📚</div><div class="dashboard-stat-value">{subject_count}</div><div class="dashboard-stat-label">Your Subjects</div><div class="dashboard-stat-foot">Courses in your workspace</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">📝</div><div class="dashboard-stat-value">{assignment_count}</div><div class="dashboard-stat-label">Assignments</div><div class="dashboard-stat-foot">Deadlines to keep in view</div></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">🎯</div><div class="dashboard-stat-value">{exam_count}</div><div class="dashboard-stat-label">Upcoming Exams</div><div class="dashboard-stat-foot">Future exam dates</div></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="dashboard-stat"><div class="dashboard-stat-icon">✓</div><div class="dashboard-stat-value">{pending_task_count}</div><div class="dashboard-stat-label">Pending Tasks</div><div class="dashboard-stat-foot">Study actions still open</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Quick actions</div><div class="dashboard-section-sub">One click takes you exactly where you need to go.</div></div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-action-panel">', unsafe_allow_html=True)
+    q1, q2, q3, q4 = st.columns(4)
+    go_ai = q1.button("🤖  Ask AI Tutor", key="dash_action_ai", use_container_width=True)
+    go_subjects = q2.button("📚  Manage Subjects", key="dash_action_subjects", use_container_width=True)
+    go_exams = q3.button("🎯  Exam Focus", key="dash_action_exams", use_container_width=True)
+    go_planner = q4.button("⚡  Study Planner", key="dash_action_planner", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if go_ai:
+        st.session_state.page = 7
+        st.rerun()
+    if go_subjects:
+        st.session_state.page = 2
+        st.rerun()
+    if go_exams:
+        st.session_state.page = 4
+        st.rerun()
+    if go_planner:
+        st.session_state.page = 5
+        st.rerun()
+
+    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Today at a glance</div><div class="dashboard-section-sub">A cleaner view of what deserves your attention.</div></div></div></div>', unsafe_allow_html=True)
+    focus_col, progress_col = st.columns([1.7, 1])
+
+    with focus_col:
+        st.markdown('<div class="dashboard-focus">', unsafe_allow_html=True)
+        st.markdown('<div class="dashboard-section-title">🔥 Priority queue</div><div class="dashboard-section-sub">Your next unfinished study actions.</div>', unsafe_allow_html=True)
+        if focus_tasks:
+            for task_title_value, task_day, task_minutes, task_priority_value, task_subject_value in focus_tasks:
+                task_subject_text = task_subject_value or "General"
+                priority_text = str(task_priority_value or "Medium")
+                st.markdown(f'<div class="focus-row"><div class="focus-icon">📖</div><div class="focus-main"><div class="focus-name">{task_title_value}</div><div class="focus-detail">{task_subject_text} • {task_day} • {task_minutes} min</div></div><div class="focus-badge">{priority_text}</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">🎉 You have no unfinished study tasks. Add a task in the Study Planner when you are ready.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with progress_col:
+        st.markdown('<div class="dashboard-progress">', unsafe_allow_html=True)
+        st.markdown('<div class="dashboard-section-title">📈 Task progress</div><div class="dashboard-section-sub">A simple snapshot of your completion pace.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="progress-ring" style="--progress:{task_progress};"><div class="progress-ring-value">{task_progress}%</div></div><div class="progress-detail">{completed_tasks} of {total_tasks} study tasks completed</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="dashboard-section"><div class="dashboard-section-head"><div><div class="dashboard-section-title">Deadlines & exam radar</div><div class="dashboard-section-sub">The next items already saved in your workspace.</div></div></div></div>', unsafe_allow_html=True)
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown('<div class="panel"><div class="panel-title">📝 Upcoming Assignments</div><div class="panel-sub">Your nearest assignment deadlines.</div></div>', unsafe_allow_html=True)
+        if upcoming_assignments:
+            st.dataframe(upcoming_assignments, use_container_width=True, hide_index=True, column_config={"title":"Assignment","deadline":"Deadline","priority":"Priority","status":"Status"})
+        else:
+            st.markdown('<div class="dashboard-empty">🎉 No assignments yet. Add your first assignment to start tracking your work.</div>', unsafe_allow_html=True)
+
+    with right:
+        st.markdown('<div class="panel"><div class="panel-title">🎯 Upcoming Exams</div><div class="panel-sub">Your next exam dates and subjects.</div></div>', unsafe_allow_html=True)
+        if upcoming_exams:
+            exam_rows = [(row[0], row[1], row[2] or "General") for row in upcoming_exams]
+            st.dataframe(exam_rows, use_container_width=True, hide_index=True, column_config={"title":"Exam","exam_date":"Exam Date","name":"Subject"})
+        else:
+            st.markdown('<div class="dashboard-empty">🎯 No upcoming exams have been added yet.</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="dashboard-ai-banner"><div class="dashboard-ai-copy"><div class="dashboard-ai-title">🤖 Your academic AI is ready</div><div class="dashboard-ai-sub">Ask questions, review your workload, or build a focused plan using your StudySphere data.</div></div><div class="dashboard-ai-badge">Connected • Gemini</div></div>', unsafe_allow_html=True)
+    open_ai = st.button("Open AI Agent", key="dash_open_ai", use_container_width=True)
+    if open_ai:
+        st.session_state.page = 7
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 2:
     st.markdown('<div class="page-banner"><div class="page-title">📚 Subjects</div><div class="page-sub">Build your academic workspace by adding your university subjects.</div></div>', unsafe_allow_html=True)
