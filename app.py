@@ -1,5 +1,7 @@
 import hashlib
+import io
 import json
+import math
 import urllib.error
 import urllib.request
 import hmac
@@ -7,7 +9,18 @@ import re
 import secrets
 import sqlite3
 import uuid
+from collections import Counter
 from datetime import date, datetime
+
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+
+try:
+    from docx import Document as DocxDocument
+except Exception:
+    DocxDocument = None
 
 import streamlit as st
 
@@ -49,6 +62,9 @@ if "ai_messages" not in st.session_state:
 if "active_chat_id" not in st.session_state:
     st.session_state.active_chat_id = None
 
+if "last_rag_sources" not in st.session_state:
+    st.session_state.last_rag_sources = []
+
 if "signup_recovery_code" not in st.session_state:
     st.session_state.signup_recovery_code = ""
 
@@ -66,6 +82,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, gemini_interaction_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, file_hash TEXT, uploaded_at TEXT NOT NULL, char_count INTEGER DEFAULT 0, chunk_count INTEGER DEFAULT 0)")
+cursor.execute("CREATE TABLE IF NOT EXISTS document_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER NOT NULL, user_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, content TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, code TEXT, instructor TEXT, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, deadline TEXT, priority TEXT, status TEXT, subject_id INTEGER, user_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, exam_date TEXT, syllabus TEXT, notes TEXT, subject_id INTEGER, user_id TEXT)")
@@ -614,6 +632,174 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.show_login = "Sign in"
 
 
+RAG_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i",
+    "if", "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the",
+    "this", "to", "was", "what", "when", "where", "which", "who", "why", "with", "you",
+    "your", "can", "could", "should", "would", "do", "does", "did", "please", "about",
+    "tell", "give", "explain", "make", "from", "into", "than", "then", "also",
+}
+
+def tokenize_for_rag(text_value):
+    tokens = re.findall(r"[A-Za-z0-9_]{3,}", str(text_value or "").lower())
+    return [token for token in tokens if token not in RAG_STOP_WORDS]
+
+def clean_document_text(text_value):
+    text_value = str(text_value or "").replace("\x00", " ")
+    text_value = re.sub(r"[ \t]+", " ", text_value)
+    text_value = re.sub(r"\n{3,}", "\n\n", text_value)
+    return text_value.strip()
+
+def extract_uploaded_text(uploaded_file):
+    file_name = uploaded_file.name or "document"
+    lower_name = file_name.lower()
+    raw = uploaded_file.getvalue()
+
+    if lower_name.endswith((".txt", ".md")):
+        return clean_document_text(raw.decode("utf-8", errors="ignore"))
+
+    if lower_name.endswith(".pdf"):
+        if PdfReader is None:
+            raise RuntimeError("PDF support is not installed. Add pypdf to requirements.txt and redeploy StudySphere.")
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for index, page_obj in enumerate(reader.pages, start=1):
+            page_text = page_obj.extract_text() or ""
+            if page_text.strip():
+                pages.append(f"[Page {index}]\n{page_text}")
+        return clean_document_text("\n\n".join(pages))
+
+    if lower_name.endswith(".docx"):
+        if DocxDocument is None:
+            raise RuntimeError("DOCX support is not installed. Add python-docx to requirements.txt and redeploy StudySphere.")
+        document = DocxDocument(io.BytesIO(raw))
+        paragraphs = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+        return clean_document_text("\n\n".join(paragraphs))
+
+    raise ValueError("Unsupported file type. Please upload PDF, TXT, DOCX, or Markdown files.")
+
+def chunk_document_text(text_value, chunk_words=220, overlap_words=45):
+    words = str(text_value or "").split()
+    if not words:
+        return []
+    chunks = []
+    start = 0
+    total = len(words)
+    step = max(1, chunk_words - overlap_words)
+    index = 0
+    while start < total:
+        chunk_words_value = words[start:start + chunk_words]
+        chunk = " ".join(chunk_words_value).strip()
+        if chunk:
+            chunks.append(chunk)
+        index += 1
+        start += step
+    return chunks
+
+def save_uploaded_document(user_id, uploaded_file, text_value):
+    file_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+    existing = cursor.execute(
+        "SELECT id FROM documents WHERE user_id = ? AND file_hash = ?",
+        (user_id, file_hash),
+    ).fetchone()
+    if existing:
+        return existing[0], False
+
+    chunks = chunk_document_text(text_value)
+    now = datetime.now().isoformat(timespec="seconds")
+    suffix = uploaded_file.name.rsplit(".", 1)[-1].lower() if "." in uploaded_file.name else "file"
+    cursor.execute(
+        "INSERT INTO documents (user_id, name, file_type, file_hash, uploaded_at, char_count, chunk_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, uploaded_file.name, suffix, file_hash, now, len(text_value), len(chunks)),
+    )
+    document_id = cursor.lastrowid
+    for chunk_index, chunk in enumerate(chunks):
+        cursor.execute(
+            "INSERT INTO document_chunks (document_id, user_id, chunk_index, content) VALUES (?, ?, ?, ?)",
+            (document_id, user_id, chunk_index, chunk),
+        )
+    conn.commit()
+    return document_id, True
+
+def delete_document(user_id, document_id):
+    cursor.execute("DELETE FROM document_chunks WHERE document_id = ? AND user_id = ?", (document_id, user_id))
+    cursor.execute("DELETE FROM documents WHERE id = ? AND user_id = ?", (document_id, user_id))
+    conn.commit()
+
+def list_documents(user_id):
+    return cursor.execute(
+        "SELECT id, name, file_type, uploaded_at, char_count, chunk_count FROM documents WHERE user_id = ? ORDER BY uploaded_at DESC",
+        (user_id,),
+    ).fetchall()
+
+def retrieve_relevant_chunks(user_id, query, top_k=6):
+    query_terms = Counter(tokenize_for_rag(query))
+    if not query_terms:
+        return []
+
+    rows = cursor.execute(
+        "SELECT document_chunks.id, document_chunks.chunk_index, document_chunks.content, documents.name, documents.file_type FROM document_chunks JOIN documents ON document_chunks.document_id = documents.id WHERE document_chunks.user_id = ? AND documents.user_id = ?",
+        (user_id, user_id),
+    ).fetchall()
+    if not rows:
+        return []
+
+    document_frequency = Counter()
+    tokenized_rows = []
+    for chunk_id, chunk_index, content, name, file_type in rows:
+        tokens = tokenize_for_rag(content)
+        unique_terms = set(tokens)
+        for term in query_terms:
+            if term in unique_terms:
+                document_frequency[term] += 1
+        tokenized_rows.append((chunk_id, chunk_index, content, name, file_type, tokens, Counter(tokens)))
+
+    total_chunks = len(tokenized_rows)
+    scored = []
+    query_phrase = " ".join(query_terms.keys())
+    for chunk_id, chunk_index, content, name, file_type, tokens, frequencies in tokenized_rows:
+        if not tokens:
+            continue
+        score = 0.0
+        matched = 0
+        for term, qtf in query_terms.items():
+            tf = frequencies.get(term, 0)
+            if tf:
+                matched += 1
+                idf = math.log((total_chunks + 1) / (document_frequency.get(term, 0) + 1)) + 1
+                score += min(tf, 4) * idf * qtf
+
+        normalized_content = " ".join(str(content).lower().split())
+        normalized_query = " ".join(str(query or "").lower().split())
+        if normalized_query and len(normalized_query) >= 10 and normalized_query in normalized_content:
+            score += 8.0
+
+        file_terms = tokenize_for_rag(name.rsplit(".", 1)[0])
+        score += sum(0.5 for term in query_terms if term in file_terms)
+
+        coverage = matched / max(1, len(query_terms))
+        score += coverage * 2.0
+        if matched:
+            scored.append((score, chunk_id, chunk_index, content, name, file_type))
+
+    scored.sort(key=lambda item: (-item[0], item[4], item[2]))
+    return scored[:top_k]
+
+def format_rag_context(chunks):
+    if not chunks:
+        return ""
+    blocks = []
+    for source_number, (_score, _chunk_id, chunk_index, content, name, _file_type) in enumerate(chunks, start=1):
+        blocks.append(
+            f"[Source {source_number}: {name} | chunk {chunk_index + 1}]\n{content}"
+        )
+    return "\n\n".join(blocks)
+
+def document_count_for_user(user_id):
+    row = cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,)).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def call_gemini_agent(api_key, prompt, model="gemini-3.1-flash-lite"):
     api_key = str(api_key or "").strip()
     if not api_key:
@@ -999,8 +1185,11 @@ def stream_gemini_interaction(api_key, chat_id, user_id, chat_messages, academic
     yield "The AI service is currently unavailable. Please try again later."
 
 
-def academic_context_for_chat(auth_id):
-    return format_agent_context(build_agent_context(auth_id))
+def academic_context_for_chat(auth_id, rag_context=""):
+    base_context = format_agent_context(build_agent_context(auth_id))
+    if rag_context:
+        return base_context + "\n\nRelevant retrieved knowledge from the student's uploaded documents:\n" + rag_context
+    return base_context
 
 
 def render_chat_history_sidebar(user_id):
@@ -1012,7 +1201,7 @@ def render_chat_history_sidebar(user_id):
         button_label = ("● " if is_active else "  ") + label
         if st.sidebar.button(button_label, key=f"chat_history_{session_id}", use_container_width=True):
             st.session_state.active_chat_id = session_id
-            st.session_state.page = 7
+            st.session_state.page = 8
             st.rerun()
 
 def build_agent_context(auth_id):
@@ -1287,8 +1476,9 @@ nav_options = [
     (3, "📝  Assignments"),
     (4, "📅  Exams"),
     (5, "✅  Study Planner"),
-    (6, "👤  Profile"),
-    (7, "🤖  AI Agent"),
+    (6, "📄  Documents"),
+    (7, "👤  Profile"),
+    (8, "🤖  AI Agent"),
 ]
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
@@ -1301,7 +1491,7 @@ st.sidebar.caption("A conversational academic assistant that remembers your chat
 if st.sidebar.button("＋ New chat", key="new_chat_sidebar", use_container_width=True):
     st.session_state.active_chat_id = create_chat_session(AUTH_ID)
     st.session_state.ai_messages = []
-    st.session_state.page = 7
+    st.session_state.page = 8
     st.rerun()
 render_chat_history_sidebar(AUTH_ID)
 
@@ -1388,7 +1578,7 @@ if st.session_state.page == 1:
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     if go_ai:
-        st.session_state.page = 7
+        st.session_state.page = 8
         st.rerun()
     if go_subjects:
         st.session_state.page = 2
@@ -1451,7 +1641,7 @@ if st.session_state.page == 1:
     st.markdown('<div class="ai-cta"><div class="ai-cta-copy"><div class="ai-cta-title">🤖 StudySphere AI is ready</div><div class="ai-cta-sub">Ask questions naturally, understand difficult topics, review your workload, or turn your stored academic data into a focused plan.</div></div><div class="ai-cta-badge">Gemini powered</div></div>', unsafe_allow_html=True)
     open_ai = st.button("Open AI Agent", key="dashboard_open_ai", use_container_width=True)
     if open_ai:
-        st.session_state.page = 7
+        st.session_state.page = 8
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1628,6 +1818,67 @@ elif st.session_state.page == 5:
             st.rerun()
 
 elif st.session_state.page == 6:
+    st.markdown('<div class="page-banner"><div class="page-title">📄 Documents & Notes</div><div class="page-sub">Upload your lecture notes and study material. StudySphere will index them so the AI can retrieve relevant passages during chat.</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel"><div class="panel-title">Build your personal knowledge base</div><div class="panel-sub">Supported formats: PDF, TXT, DOCX and Markdown. Files are stored for your signed-in account and never mixed with another user.</div></div>', unsafe_allow_html=True)
+    uploaded_files = st.file_uploader(
+        "Upload study material",
+        type=["pdf", "txt", "docx", "md"],
+        accept_multiple_files=True,
+        key="rag_uploader",
+        help="For best retrieval, upload clean lecture notes, slides exported as text, or course handouts.",
+    )
+    add_documents = st.button("＋ Add documents to StudySphere", use_container_width=True, key="add_rag_documents")
+
+    if add_documents:
+        if not uploaded_files:
+            st.warning("Choose at least one document first.")
+        else:
+            added = 0
+            skipped = 0
+            failed = []
+            for uploaded in uploaded_files:
+                try:
+                    extracted = extract_uploaded_text(uploaded)
+                    if len(extracted.strip()) < 40:
+                        failed.append(f"{uploaded.name}: not enough readable text was found.")
+                        continue
+                    _document_id, was_added = save_uploaded_document(AUTH_ID, uploaded, extracted)
+                    if was_added:
+                        added += 1
+                    else:
+                        skipped += 1
+                except Exception as exc:
+                    failed.append(f"{uploaded.name}: {str(exc)}")
+
+            if added:
+                st.success(f"{added} document{'s' if added != 1 else ''} indexed successfully.")
+            if skipped:
+                st.info(f"{skipped} document{'s were' if skipped != 1 else ' was'} already in your knowledge base.")
+            for problem in failed:
+                st.error(problem)
+            if added:
+                st.rerun()
+
+    documents = list_documents(AUTH_ID)
+    document_total = len(documents)
+
+    st.markdown('<div class="section-kicker" style="margin-top:24px;">Knowledge base</div>', unsafe_allow_html=True)
+    if not documents:
+        st.markdown('<div class="dashboard-empty" style="margin-top:10px;">📚 Your knowledge base is empty. Upload lecture notes or course material above, then ask the AI about them.</div>', unsafe_allow_html=True)
+    else:
+        for document_id, document_name, file_type, uploaded_at, char_count, chunk_count in documents:
+            d1, d2 = st.columns([5, 1])
+            d1.markdown(f'<div class="panel" style="margin-top:10px;padding:15px;"><div class="panel-title">📘 {document_name}</div><div class="panel-sub">{file_type.upper()} • {chunk_count} indexed chunks • {char_count:,} characters • added {uploaded_at}</div></div>', unsafe_allow_html=True)
+            remove_document = d2.button("Delete", key=f"delete_doc_{document_id}", use_container_width=True)
+            if remove_document:
+                delete_document(AUTH_ID, document_id)
+                st.success("Document removed from your knowledge base.")
+                st.rerun()
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">RAG enabled</div><div class="ai-title">🧠 Ask the AI about your own notes</div><div class="ai-text">When you ask a question in the AI Agent, StudySphere retrieves the most relevant passages from your uploaded documents and gives those passages to Gemini as context before generating the answer.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 7:
     st.markdown('<div class="page-banner"><div class="page-title">👤 Profile</div><div class="page-sub">Keep your student profile and study preferences up to date.</div></div>', unsafe_allow_html=True)
     profile = cursor.execute("SELECT name, email, university, degree, semester, career_goal, skills, study_preferences FROM users WHERE auth_id = ?", (AUTH_ID,)).fetchone()
     profile = profile or (DISPLAY_NAME, EMAIL, "", "", "", "", "", "")
@@ -1677,19 +1928,19 @@ elif st.session_state.page == 6:
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Account security</div><div class="ai-title">🛡️ Your login is built directly into StudySphere</div><div class="ai-text">StudySphere keeps authentication and academic records in the local SQLite database. Passwords are never stored as plain text.</div></div>', unsafe_allow_html=True)
 
-elif st.session_state.page == 7:
+elif st.session_state.page == 8:
     active_chat_id = ensure_active_chat(AUTH_ID)
     chat_rows = load_chat_messages(active_chat_id, AUTH_ID)
 
     st.markdown('<div class="chat-shell">', unsafe_allow_html=True)
     st.markdown(
-        '<div class="chat-header"><div class="chat-brand">🤖 StudySphere AI</div><div class="chat-model">✦ Gemini • Stateful AI</div></div>',
+        '<div class="chat-header"><div><div class="chat-brand">🤖 StudySphere AI</div><div style="color:var(--ss-muted);font-size:10px;margin-top:3px;">Conversational AI + Retrieval-Augmented Generation</div></div><div class="chat-model">✦ Gemini • RAG enabled</div></div>',
         unsafe_allow_html=True,
     )
 
     if not chat_rows:
         st.markdown(
-            '<div class="chat-welcome"><div class="chat-welcome-icon">✦</div><div class="chat-welcome-title">How can I help you study?</div><div class="chat-welcome-sub">Have a natural conversation with your academic AI. Ask questions, follow up, plan your week, or use your StudySphere data when you need it.</div></div>',
+            '<div class="chat-welcome"><div class="chat-welcome-icon">✦</div><div class="chat-welcome-title">How can I help you study?</div><div class="chat-welcome-sub">Chat naturally, ask follow-up questions, plan your week, or ask about the notes you uploaded. StudySphere retrieves relevant passages from your knowledge base when useful.</div></div>',
             unsafe_allow_html=True,
         )
         p1, p2, p3, p4 = st.columns(4)
@@ -1697,6 +1948,11 @@ elif st.session_state.page == 7:
         p2.markdown('<div class="prompt-card"><div class="prompt-icon">📅</div><div class="prompt-title">Plan my week</div><div class="prompt-sub">Use my real deadlines and exams</div></div>', unsafe_allow_html=True)
         p3.markdown('<div class="prompt-card"><div class="prompt-icon">📝</div><div class="prompt-title">Review my work</div><div class="prompt-sub">Help me find what needs attention</div></div>', unsafe_allow_html=True)
         p4.markdown('<div class="prompt-card"><div class="prompt-icon">🎯</div><div class="prompt-title">Quiz me</div><div class="prompt-sub">Practice before an exam</div></div>', unsafe_allow_html=True)
+        rag_doc_total = document_count_for_user(AUTH_ID)
+        if rag_doc_total:
+            st.caption(f"📚 {rag_doc_total} study document{'s are' if rag_doc_total != 1 else ' is'} indexed. Ask about your uploaded notes and StudySphere will retrieve relevant passages automatically.")
+        else:
+            st.caption("📚 Add your notes in Documents to give the AI access to your own study material.")
 
     for role, content, _created_at in chat_rows:
         avatar = "🧑‍🎓" if role == "user" else "🤖"
@@ -1715,7 +1971,10 @@ elif st.session_state.page == 7:
                 st.markdown(prompt_text)
 
             refreshed_rows = load_chat_messages(active_chat_id, AUTH_ID)
-            academic_context = academic_context_for_chat(AUTH_ID)
+            rag_chunks = retrieve_relevant_chunks(AUTH_ID, prompt_text, top_k=6)
+            rag_context = format_rag_context(rag_chunks)
+            st.session_state.last_rag_sources = [item[4] for item in rag_chunks]
+            academic_context = academic_context_for_chat(AUTH_ID, rag_context)
             with st.chat_message("assistant", avatar="🤖"):
                 streamed_answer = st.write_stream(
                     stream_gemini_interaction(
@@ -1727,6 +1986,10 @@ elif st.session_state.page == 7:
                         prompt_text,
                     )
                 )
+
+            if rag_chunks:
+                unique_sources = list(dict.fromkeys(st.session_state.last_rag_sources))
+                st.caption("📚 Sources retrieved: " + " • ".join(unique_sources))
 
             answer_text = streamed_answer if isinstance(streamed_answer, str) else str(streamed_answer)
             answer_text = answer_text.strip()
