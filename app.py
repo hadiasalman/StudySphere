@@ -24,6 +24,20 @@ except Exception:
 
 import streamlit as st
 
+try:
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+except Exception:
+    Presentation = None
+    MSO_SHAPE = None
+    PP_ALIGN = None
+    MSO_ANCHOR = None
+    Inches = Pt = None
+    RGBColor = None
+
 st.set_page_config(
     page_title="StudySphere",
     page_icon="🎓",
@@ -64,6 +78,12 @@ if "active_chat_id" not in st.session_state:
 
 if "last_rag_sources" not in st.session_state:
     st.session_state.last_rag_sources = []
+
+if "presentation_data" not in st.session_state:
+    st.session_state.presentation_data = None
+
+if "presentation_prompt" not in st.session_state:
+    st.session_state.presentation_prompt = ""
 
 if "signup_recovery_code" not in st.session_state:
     st.session_state.signup_recovery_code = ""
@@ -1234,6 +1254,344 @@ def format_agent_context(context):
     return json.dumps(context, ensure_ascii=False, indent=2, default=str)
 
 
+
+def _ppt_rgb(hex_value):
+    hex_value = str(hex_value).lstrip("#")
+    return RGBColor(int(hex_value[0:2], 16), int(hex_value[2:4], 16), int(hex_value[4:6], 16))
+
+
+def _ppt_theme(theme_name):
+    themes = {
+        "Ocean": {
+            "navy": "10243E",
+            "blue": "2563EB",
+            "cyan": "06B6D4",
+            "ink": "172033",
+            "muted": "64748B",
+            "surface": "F8FAFC",
+            "line": "DCE4EF",
+            "white": "FFFFFF",
+            "soft": "EAF6FF",
+        },
+        "Executive": {
+            "navy": "18212F",
+            "blue": "334155",
+            "cyan": "0EA5A5",
+            "ink": "1F2937",
+            "muted": "64748B",
+            "surface": "F7F8FA",
+            "line": "D7DEE8",
+            "white": "FFFFFF",
+            "soft": "ECFDF5",
+        },
+        "Creative": {
+            "navy": "2B1B3D",
+            "blue": "6D28D9",
+            "cyan": "F97316",
+            "ink": "211A27",
+            "muted": "6B6475",
+            "surface": "FCFAFD",
+            "line": "E8DFF0",
+            "white": "FFFFFF",
+            "soft": "FFF2E8",
+        },
+    }
+    return themes.get(theme_name, themes["Ocean"])
+
+
+def _ppt_set_bg(slide, color_hex):
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = _ppt_rgb(color_hex)
+
+
+def _ppt_shape(slide, shape_type, x, y, w, h, fill_hex, line_hex=None, radius=True):
+    shape = slide.shapes.add_shape(shape_type, x, y, w, h)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = _ppt_rgb(fill_hex)
+    shape.line.color.rgb = _ppt_rgb(line_hex or fill_hex)
+    return shape
+
+
+def _ppt_textbox(slide, text, x, y, w, h, font_size=20, color="172033", bold=False, align=None, font_name="Aptos", margin=0.04, valign=MSO_ANCHOR.TOP):
+    box = slide.shapes.add_textbox(x, y, w, h)
+    tf = box.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.margin_left = Inches(margin)
+    tf.margin_right = Inches(margin)
+    tf.margin_top = Inches(margin)
+    tf.margin_bottom = Inches(margin)
+    tf.vertical_anchor = valign
+    p = tf.paragraphs[0]
+    p.text = str(text or "")
+    p.alignment = align if align is not None else PP_ALIGN.LEFT
+    run = p.runs[0]
+    run.font.name = font_name
+    run.font.size = Pt(font_size)
+    run.font.bold = bold
+    run.font.color.rgb = _ppt_rgb(color)
+    return box
+
+
+def _ppt_add_footer(slide, theme, slide_number):
+    _ppt_textbox(slide, "StudySphere • Learn smarter. Plan better. Achieve more.", Inches(0.55), Inches(7.05), Inches(8.8), Inches(0.25), 8.5, theme["muted"])
+    _ppt_textbox(slide, str(slide_number), Inches(12.45), Inches(7.02), Inches(0.45), Inches(0.25), 8.5, theme["muted"], align=PP_ALIGN.RIGHT)
+
+
+def _ppt_title(slide, title, subtitle, theme, slide_number):
+    _ppt_textbox(slide, title, Inches(0.65), Inches(0.50), Inches(11.2), Inches(0.65), 25, theme["ink"], True)
+    _ppt_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0.65), Inches(1.18), Inches(0.95), Inches(0.06), theme["blue"], theme["blue"], radius=False)
+    if subtitle:
+        _ppt_textbox(slide, subtitle, Inches(0.65), Inches(1.30), Inches(11.2), Inches(0.45), 11, theme["muted"])
+    _ppt_add_footer(slide, theme, slide_number)
+
+
+def _ppt_bullets(slide, bullets, x, y, w, h, theme, font_size=16):
+    box = slide.shapes.add_textbox(x, y, w, h)
+    tf = box.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.margin_left = Inches(0.02)
+    tf.margin_right = Inches(0.04)
+    tf.margin_top = Inches(0.02)
+    tf.margin_bottom = Inches(0.02)
+    for idx, bullet in enumerate(bullets or []):
+        p = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+        p.text = str(bullet or "")
+        p.level = 0
+        p.space_after = Pt(9)
+        p.font.size = Pt(font_size)
+        p.font.name = "Aptos"
+        p.font.color.rgb = _ppt_rgb(theme["ink"])
+        p.text = "•  " + str(bullet or "")
+    return box
+
+
+def _ppt_two_column(slide, left_title, left_bullets, right_title, right_bullets, theme):
+    _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.65), Inches(1.95), Inches(5.75), Inches(4.65), theme["surface"], theme["line"])
+    _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(6.60), Inches(1.95), Inches(5.75), Inches(4.65), theme["soft"], theme["line"])
+    _ppt_textbox(slide, left_title, Inches(0.95), Inches(2.25), Inches(5.1), Inches(0.38), 16, theme["ink"], True)
+    _ppt_bullets(slide, left_bullets, Inches(0.95), Inches(2.78), Inches(5.0), Inches(3.35), theme, 14.5)
+    _ppt_textbox(slide, right_title, Inches(6.90), Inches(2.25), Inches(5.1), Inches(0.38), 16, theme["blue"], True)
+    _ppt_bullets(slide, right_bullets, Inches(6.90), Inches(2.78), Inches(5.0), Inches(3.35), theme, 14.5)
+
+
+def _ppt_add_section_label(slide, label, theme):
+    _ppt_textbox(slide, str(label).upper(), Inches(0.68), Inches(1.72), Inches(3.2), Inches(0.28), 8.5, theme["blue"], True)
+
+
+def build_pptx_bytes(deck, theme_name="Ocean"):
+    if Presentation is None:
+        return None
+    theme = _ppt_theme(theme_name)
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank = prs.slide_layouts[6]
+    slides = deck.get("slides") or []
+    deck_title = str(deck.get("title") or "StudySphere Presentation")
+    deck_subtitle = str(deck.get("subtitle") or "Generated with StudySphere AI")
+
+    # Title slide
+    slide = prs.slides.add_slide(blank)
+    _ppt_set_bg(slide, theme["navy"])
+    _ppt_shape(slide, MSO_SHAPE.OVAL, Inches(9.2), Inches(-1.0), Inches(5.1), Inches(5.1), theme["blue"], theme["blue"])
+    _ppt_shape(slide, MSO_SHAPE.OVAL, Inches(10.55), Inches(3.55), Inches(3.5), Inches(3.5), theme["cyan"], theme["cyan"])
+    _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.75), Inches(0.78), Inches(2.15), Inches(0.42), theme["blue"], theme["blue"])
+    _ppt_textbox(slide, "STUDYSPHERE • AI PRESENTATION STUDIO", Inches(0.91), Inches(0.86), Inches(3.2), Inches(0.25), 8.5, theme["white"], True)
+    _ppt_textbox(slide, deck_title, Inches(0.75), Inches(1.62), Inches(8.8), Inches(1.55), 33, theme["white"], True)
+    _ppt_textbox(slide, deck_subtitle, Inches(0.78), Inches(3.32), Inches(7.75), Inches(0.92), 16, "DCE7F5")
+    _ppt_textbox(slide, "Generated from a single prompt • Structured by Gemini • Designed by StudySphere", Inches(0.78), Inches(6.58), Inches(8.4), Inches(0.3), 9.5, "B9C7D8")
+    _ppt_textbox(slide, "01", Inches(11.95), Inches(6.40), Inches(0.62), Inches(0.35), 10, "DCE7F5", True, align=PP_ALIGN.RIGHT)
+
+    for idx, item in enumerate(slides, start=2):
+        slide = prs.slides.add_slide(blank)
+        _ppt_set_bg(slide, theme["white"])
+        title = str(item.get("title") or f"Slide {idx-1}")
+        subtitle = str(item.get("subtitle") or "")
+        layout = str(item.get("layout") or "content").lower()
+        bullets = item.get("bullets") or []
+        body = str(item.get("body") or "").strip()
+
+        if layout in {"section", "divider"}:
+            _ppt_set_bg(slide, theme["navy"])
+            _ppt_textbox(slide, f"{idx-1:02d}", Inches(0.78), Inches(1.0), Inches(0.8), Inches(0.55), 15, theme["cyan"], True)
+            _ppt_textbox(slide, title, Inches(0.78), Inches(2.10), Inches(10.6), Inches(1.2), 34, theme["white"], True)
+            _ppt_textbox(slide, subtitle or body, Inches(0.80), Inches(3.45), Inches(8.8), Inches(1.2), 15, "DCE7F5")
+            _ppt_shape(slide, MSO_SHAPE.RECTANGLE, Inches(0.80), Inches(5.15), Inches(1.25), Inches(0.08), theme["cyan"], theme["cyan"], radius=False)
+            _ppt_add_footer(slide, theme, idx-1)
+            continue
+
+        _ppt_title(slide, title, subtitle, theme, idx-1)
+        _ppt_add_section_label(slide, str(item.get("section") or "StudySphere"), theme)
+
+        if layout in {"two_column", "comparison"}:
+            left_title = str(item.get("left_title") or "Key ideas")
+            right_title = str(item.get("right_title") or "Practical view")
+            left_bullets = item.get("left_bullets") or bullets[: max(1, len(bullets)//2)]
+            right_bullets = item.get("right_bullets") or bullets[max(1, len(bullets)//2):]
+            _ppt_two_column(slide, left_title, left_bullets, right_title, right_bullets, theme)
+        elif layout in {"quote", "key_message"}:
+            _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1.05), Inches(2.0), Inches(11.1), Inches(3.85), theme["surface"], theme["line"])
+            _ppt_textbox(slide, "“", Inches(1.40), Inches(2.20), Inches(0.65), Inches(0.65), 42, theme["cyan"], True)
+            quote = body or (bullets[0] if bullets else "A clear idea can change how we learn.")
+            _ppt_textbox(slide, quote, Inches(1.75), Inches(2.65), Inches(9.9), Inches(1.75), 24, theme["ink"], True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
+            source = str(item.get("source") or "StudySphere")
+            _ppt_textbox(slide, source, Inches(4.35), Inches(4.85), Inches(4.6), Inches(0.35), 10, theme["muted"], align=PP_ALIGN.CENTER)
+        elif layout in {"process", "timeline"}:
+            steps = item.get("steps") or bullets or ["Understand", "Practice", "Apply", "Review"]
+            count = min(len(steps), 5)
+            gap = 0.18
+            total_w = 11.65
+            card_w = (total_w - gap * (count-1)) / count if count else total_w
+            for sidx, step in enumerate(steps[:5]):
+                x = 0.70 + sidx * (card_w + gap)
+                _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(2.35), Inches(card_w), Inches(2.95), theme["surface"], theme["line"])
+                _ppt_textbox(slide, f"{sidx+1:02d}", Inches(x+0.18), Inches(2.55), Inches(0.42), Inches(0.32), 10, theme["blue"], True)
+                _ppt_textbox(slide, str(step), Inches(x+0.18), Inches(3.08), Inches(card_w-0.36), Inches(1.5), 14.5, theme["ink"], True, valign=MSO_ANCHOR.MIDDLE)
+                if sidx < count-1:
+                    _ppt_textbox(slide, "→", Inches(x+card_w+0.02), Inches(3.35), Inches(0.16), Inches(0.35), 13, theme["cyan"], True, align=PP_ALIGN.CENTER)
+        else:
+            if body:
+                _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.70), Inches(1.95), Inches(7.25), Inches(4.65), theme["surface"], theme["line"])
+                _ppt_textbox(slide, body, Inches(1.02), Inches(2.28), Inches(6.60), Inches(3.85), 16, theme["ink"], False)
+                if bullets:
+                    _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.20), Inches(1.95), Inches(4.45), Inches(4.65), theme["soft"], theme["line"])
+                    _ppt_textbox(slide, "Key takeaways", Inches(8.52), Inches(2.28), Inches(3.7), Inches(0.38), 15, theme["blue"], True)
+                    _ppt_bullets(slide, bullets, Inches(8.50), Inches(2.80), Inches(3.55), Inches(3.25), theme, 13.5)
+            else:
+                _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.70), Inches(1.95), Inches(11.95), Inches(4.65), theme["surface"], theme["line"])
+                _ppt_bullets(slide, bullets, Inches(1.05), Inches(2.35), Inches(11.1), Inches(3.85), theme, 16)
+
+    # Closing slide
+    slide = prs.slides.add_slide(blank)
+    _ppt_set_bg(slide, theme["navy"])
+    _ppt_textbox(slide, "READY TO LEARN SMARTER?", Inches(0.78), Inches(1.0), Inches(6.8), Inches(0.45), 10, theme["cyan"], True)
+    _ppt_textbox(slide, str(deck.get("closing_title") or "Key takeaways"), Inches(0.78), Inches(1.58), Inches(8.6), Inches(0.85), 30, theme["white"], True)
+    close_bullets = deck.get("closing_bullets") or ["Review the core ideas.", "Apply them with practice.", "Use StudySphere to keep your next steps organized."]
+    _ppt_bullets(slide, close_bullets, Inches(0.86), Inches(2.70), Inches(7.6), Inches(2.7), {**theme, "ink": theme["white"]}, 15)
+    _ppt_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, Inches(9.45), Inches(1.45), Inches(2.85), Inches(2.85), theme["blue"], theme["blue"])
+    _ppt_textbox(slide, "QUESTIONS?", Inches(9.72), Inches(2.35), Inches(2.3), Inches(0.55), 19, theme["white"], True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
+    _ppt_textbox(slide, "StudySphere", Inches(9.72), Inches(3.25), Inches(2.3), Inches(0.35), 10, "DCE7F5", align=PP_ALIGN.CENTER)
+    _ppt_textbox(slide, "Learn smarter. Plan better. Achieve more.", Inches(0.82), Inches(6.52), Inches(7.5), Inches(0.3), 9.5, "B9C7D8")
+
+    buffer = io.BytesIO()
+    prs.save(buffer)
+    return buffer.getvalue()
+
+
+def _presentation_json_from_text(raw_text):
+    cleaned = str(raw_text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("Gemini did not return a structured presentation.")
+    return json.loads(cleaned[start:end+1])
+
+
+def generate_presentation_deck(prompt_text, slide_count, audience, tone, theme_name, use_notes):
+    api_key = str(GLOBAL_GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return None, "The presentation generator is temporarily unavailable."
+
+    rag_context = ""
+    try:
+        relevant_chunks = retrieve_relevant_chunks(AUTH_ID, prompt_text, top_k=10)
+        rag_context = format_rag_context(relevant_chunks)
+    except Exception:
+        rag_context = ""
+
+    schema = {
+        "title": "Presentation title",
+        "subtitle": "One-sentence subtitle",
+        "closing_title": "Key takeaways",
+        "closing_bullets": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
+        "slides": [
+            {
+                "title": "Slide title",
+                "subtitle": "Optional subtitle",
+                "section": "Section label",
+                "layout": "content | two_column | process | quote | section",
+                "body": "Optional paragraph",
+                "bullets": ["Point 1", "Point 2", "Point 3"],
+                "left_title": "Optional left heading",
+                "left_bullets": ["Left point"],
+                "right_title": "Optional right heading",
+                "right_bullets": ["Right point"],
+                "steps": ["Step 1", "Step 2", "Step 3"],
+                "source": "Optional attribution"
+            }
+        ]
+    }
+
+    system_text = (
+        "You are StudySphere Presentation Designer. Create a coherent, presentation-ready slide deck from one user prompt. "
+        "The audience and tone must match the request. Build a logical narrative: opening/context, core ideas, examples or applications, "
+        "practical implications, and a clear conclusion. Never make up citations. If source material is provided, stay faithful to it. "
+        "Use concise slide text suitable for PowerPoint: do not write essay paragraphs on every slide. Prefer 3-5 bullets per slide. "
+        "Return ONLY valid JSON matching the requested schema. No Markdown fences, no commentary. "
+        "Use at most one section/divider slide and at most one quote slide unless the prompt clearly needs more. "
+    )
+    source_block = ("\n\nRelevant uploaded study material:\n" + rag_context) if rag_context else ""
+    user_text = (
+        f"Create a complete {slide_count}-content-slide presentation (plus title and closing slides) from this prompt:\n\n"
+        f"{prompt_text.strip()}\n\n"
+        f"Audience: {audience}\nTone: {tone}\nVisual theme: {theme_name}\n"
+        f"Speaker notes requested: {'yes' if use_notes else 'no'}\n"
+        "Make the deck understandable even when the audience only sees the slides. "
+        "For process/timeline slides, use the 'steps' array. For comparisons, use two_column. "
+        "For a strong key message, use quote. Keep titles short.\n\n"
+        f"JSON schema:\n{json.dumps(schema, ensure_ascii=False)}"
+        + source_block
+    )
+
+    models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
+    last_error = "Presentation generation failed."
+    for model in models:
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "systemInstruction": {"parts": [{"text": system_text}]},
+            "generationConfig": {"temperature": 0.45, "maxOutputTokens": 6500},
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            candidates = data.get("candidates") or []
+            parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+            raw = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+            deck = _presentation_json_from_text(raw)
+            deck["slides"] = list(deck.get("slides") or [])[:slide_count]
+            if not deck["slides"]:
+                raise ValueError("The generated deck contained no slides.")
+            return deck, ""
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                last_error = "The selected Gemini model is unavailable for this project."
+                continue
+            if exc.code == 429:
+                return None, "Gemini rate limit reached. Please try again in a little while."
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+                parsed = json.loads(detail)
+                message = ((parsed.get("error") or {}).get("message") or "Gemini request failed.")
+            except Exception:
+                message = "Gemini request failed."
+            return None, message
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+    return None, last_error
+
 def clear_authenticated_user():
     st.session_state.auth_id = None
     st.session_state.display_name = ""
@@ -1479,6 +1837,7 @@ nav_options = [
     (6, "📄  Documents"),
     (7, "👤  Profile"),
     (8, "🤖  AI Agent"),
+    (9, "📊  Presentation Studio"),
 ]
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
@@ -1494,6 +1853,10 @@ if st.sidebar.button("＋ New chat", key="new_chat_sidebar", use_container_width
     st.session_state.page = 8
     st.rerun()
 render_chat_history_sidebar(AUTH_ID)
+st.sidebar.markdown('<div class="sidebar-label">Create</div>', unsafe_allow_html=True)
+if st.sidebar.button("📊 Presentation Studio", key="presentation_studio_sidebar", use_container_width=True):
+    st.session_state.page = 9
+    st.rerun()
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
 if dark_mode_toggle != st.session_state.dark_mode:
@@ -1999,6 +2362,108 @@ elif st.session_state.page == 8:
             st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+
+elif st.session_state.page == 9:
+    st.markdown('<div class="page-banner"><div class="page-title">📊 Presentation Studio</div><div class="page-sub">Turn a single prompt into a complete, downloadable PowerPoint deck.</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel"><div class="panel-title">Create your presentation</div><div class="panel-sub">Describe the topic, audience, and result you want. StudySphere will build the slide structure, write concise content, and generate a real .pptx file.</div></div>', unsafe_allow_html=True)
+
+    presentation_prompt = st.text_area(
+        "Presentation prompt",
+        value=st.session_state.presentation_prompt,
+        height=160,
+        placeholder="Example: Create a 10-slide presentation for BS Artificial Intelligence students explaining Retrieval-Augmented Generation (RAG), including the problem it solves, architecture, workflow, components, benefits, limitations, a real-world example, and a final summary.",
+        key="presentation_prompt_input",
+    )
+
+    c1, c2, c3 = st.columns(3)
+    presentation_slide_count = c1.slider("Content slides", min_value=4, max_value=15, value=8, step=1)
+    presentation_audience = c2.selectbox("Audience", ["University students", "School/college students", "Teachers", "Professional audience", "General audience"])
+    presentation_tone = c3.selectbox("Tone", ["Clear & academic", "Modern & engaging", "Professional & executive", "Simple & beginner-friendly"])
+
+    c4, c5 = st.columns(2)
+    presentation_theme = c4.selectbox("PPT theme", ["Ocean", "Executive", "Creative"])
+    presentation_use_notes = c5.checkbox("Prepare speaker-note guidance", value=True)
+
+    generate_presentation = st.button("✨ Generate PowerPoint", key="generate_presentation", use_container_width=True)
+    if generate_presentation:
+        if not presentation_prompt.strip():
+            st.error("Please describe what you want the presentation to cover.")
+        elif Presentation is None:
+            st.error("PowerPoint support is not installed. Add python-pptx to requirements.txt and redeploy the app.")
+        else:
+            st.session_state.presentation_prompt = presentation_prompt.strip()
+            with st.spinner("🎨 StudySphere is designing your presentation..."):
+                deck_data, deck_error = generate_presentation_deck(
+                    presentation_prompt.strip(),
+                    presentation_slide_count,
+                    presentation_audience,
+                    presentation_tone,
+                    presentation_theme,
+                    presentation_use_notes,
+                )
+            if deck_data:
+                try:
+                    deck_bytes = build_pptx_bytes(deck_data, presentation_theme)
+                    st.session_state.presentation_data = {
+                        "deck": deck_data,
+                        "bytes": deck_bytes,
+                        "theme": presentation_theme,
+                    }
+                    st.success("Your PowerPoint has been generated.")
+                except Exception as exc:
+                    st.session_state.presentation_data = None
+                    st.error(f"PowerPoint creation failed: {type(exc).__name__}: {exc}")
+            else:
+                st.session_state.presentation_data = None
+                st.error(deck_error or "The presentation could not be generated.")
+
+    if st.session_state.presentation_data:
+        presentation_data = st.session_state.presentation_data
+        deck_data = presentation_data["deck"]
+        st.markdown('<div class="panel"><div class="panel-title">✅ Presentation ready</div><div class="panel-sub">Review the slide outline below, then download the finished PowerPoint.</div></div>', unsafe_allow_html=True)
+
+        deck_title = str(deck_data.get("title") or "StudySphere Presentation")
+        st.markdown(f"### {deck_title}")
+        st.caption(f"{len(deck_data.get('slides') or [])} content slides + title + closing slide • Theme: {presentation_data['theme']}")
+
+        for slide_index, slide_item in enumerate(deck_data.get("slides") or [], start=1):
+            with st.expander(f"Slide {slide_index}: {slide_item.get('title', 'Untitled')}", expanded=slide_index <= 2):
+                subtitle = str(slide_item.get("subtitle") or "").strip()
+                body = str(slide_item.get("body") or "").strip()
+                if subtitle:
+                    st.caption(subtitle)
+                if body:
+                    st.write(body)
+                bullets = slide_item.get("bullets") or []
+                for bullet in bullets:
+                    st.markdown(f"• {bullet}")
+                if slide_item.get("layout") == "two_column":
+                    st.markdown(f"**{slide_item.get('left_title', 'Left')}**")
+                    for bullet in slide_item.get("left_bullets") or []:
+                        st.markdown(f"• {bullet}")
+                    st.markdown(f"**{slide_item.get('right_title', 'Right')}**")
+                    for bullet in slide_item.get("right_bullets") or []:
+                        st.markdown(f"• {bullet}")
+                if slide_item.get("layout") in {"process", "timeline"}:
+                    st.write(" → ".join(str(x) for x in (slide_item.get("steps") or [])))
+
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", deck_title).strip("_") or "StudySphere_Presentation"
+        st.download_button(
+            "⬇️ Download PowerPoint (.pptx)",
+            data=presentation_data["bytes"],
+            file_name=f"{safe_name}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            use_container_width=True,
+        )
+
+        if st.button("🗑️ Clear presentation", key="clear_presentation", use_container_width=True):
+            st.session_state.presentation_data = None
+            st.rerun()
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">PPT • AI assisted</div><div class="ai-title">From prompt to presentation</div><div class="ai-text">StudySphere can also use relevant passages from your uploaded study documents when building the deck, so the presentation can stay grounded in your own notes when the topic matches your knowledge base.</div></div>', unsafe_allow_html=True)
 
 st.markdown('<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">StudySphere • Learn smarter. Plan better. Achieve more.</div>', unsafe_allow_html=True)
 
