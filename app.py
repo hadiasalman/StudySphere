@@ -130,865 +130,432 @@ GLOBAL_GEMINI_API_KEY = str(global_gemini_row[0] or "").strip() if global_gemini
 dark_mode = st.session_state.dark_mode
 
 if dark_mode:
-    bg = "#07111F"
-    card = "#0F1B2D"
-    card2 = "#132238"
-    text = "#F8FAFC"
-    muted = "#94A3B8"
-    border = "#24344D"
-    sidebar_bg = "#091524"
-    shadow = "0 10px 30px rgba(0,0,0,.22)"
+    bg = "#110D1B"
+    card = "#181321"
+    card2 = "#211A2C"
+    text = "#F7F3FF"
+    muted = "#BEB4CD"
+    border = "#352A43"
+    sidebar_bg = "#0F0B17"
+    shadow = "0 18px 42px rgba(0,0,0,.30)"
 else:
-    bg = "#F4F7FB"
+    bg = "#F8F7FC"
     card = "#FFFFFF"
-    card2 = "#F8FAFC"
-    text = "#0F172A"
-    muted = "#64748B"
-    border = "#E2E8F0"
-    sidebar_bg = "#FFFFFF"
-    shadow = "0 10px 30px rgba(15,23,42,.06)"
+    card2 = "#F3F0F8"
+    text = "#17141C"
+    muted = "#6B6475"
+    border = "#E7E0EF"
+    sidebar_bg = "#FFFEFF"
+    shadow = "0 16px 36px rgba(38,25,55,.07)"
 
 st.markdown(
-    f"""
+    """
 <style>
-.stApp {{ --ss-bg:{bg}; --ss-card:{card}; --ss-chat-assistant:{card}; background:{bg}; color:{text}; }}
-[data-testid="stAppViewContainer"] {{ background:{bg}; }}
-[data-testid="stHeader"] {{ background:transparent; }}
-.block-container {{ max-width:1450px; padding-top:1.4rem; padding-bottom:3rem; animation:floatIn .45s ease-out; }}
+:root {
+  --ss-primary: __PRIMARY__;
+  --ss-primary-hover: __PRIMARY_HOVER__;
+  --ss-primary-soft: __PRIMARY_SOFT__;
+  --ss-accent: __ACCENT__;
+  --ss-accent-soft: __ACCENT_SOFT__;
+  --ss-success: #16A34A;
+  --ss-danger: #DC2626;
+  --ss-bg: __BG__;
+  --ss-surface: __CARD__;
+  --ss-surface-2: __CARD2__;
+  --ss-text: __TEXT__;
+  --ss-muted: __MUTED__;
+  --ss-border: __BORDER__;
+  --ss-shadow: __SHADOW__;
+}
 
-h1,h2,h3,h4,h5,h6,p,label,.stMarkdown,.stCaption {{ color:{text} !important; }}
-[data-testid="stSidebar"] {{ background:{sidebar_bg}; border-right:1px solid {border}; }}
-[data-testid="stSidebar"] * {{ color:{text} !important; }}
-
-@keyframes floatIn {{
-    from {{ opacity:0; transform:translateY(12px); }}
-    to {{ opacity:1; transform:translateY(0); }}
-}}
-@keyframes shimmer {{
-    0% {{ background-position:-500px 0; }}
-    100% {{ background-position:500px 0; }}
-}}
-@keyframes softPulse {{
-    0%,100% {{ box-shadow:0 0 0 0 rgba(79,70,229,.16); }}
-    50% {{ box-shadow:0 0 0 9px rgba(79,70,229,0); }}
-}}
-
-.brand {{ padding:8px 4px 22px; }}
-.logo-row {{ display:flex; align-items:center; gap:10px; }}
-.logo {{ width:42px; height:42px; border-radius:13px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4F46E5,#3730A3); color:white !important; font-size:22px; box-shadow:0 8px 20px rgba(79,70,229,.25); }}
-.brand-name {{ font-size:23px; font-weight:850; letter-spacing:-.7px; }}
-.brand-tag {{ margin:7px 0 0 52px; color:{muted} !important; font-size:11px; }}
-.sidebar-label {{ color:{muted} !important; text-transform:uppercase; letter-spacing:1.2px; font-size:10px; font-weight:800; margin:15px 0 7px; }}
-
-.hero {{ position:relative; overflow:hidden; padding:34px 36px; border-radius:25px; margin-bottom:22px; background:radial-gradient(circle at 85% 15%,rgba(34,211,238,.30),transparent 28%),radial-gradient(circle at 10% 100%,rgba(59,130,246,.20),transparent 30%),linear-gradient(135deg,#3730A3,#3730A3 52%,#0F172A); box-shadow:0 18px 45px rgba(55,48,163,.20); }}
-.hero::after {{ content:""; position:absolute; inset:0; pointer-events:none; background:linear-gradient(110deg,transparent 35%,rgba(255,255,255,.08) 50%,transparent 65%); background-size:500px 100%; animation:shimmer 7s linear infinite; }}
-.hero > * {{ position:relative; z-index:1; }}
-.hero-kicker {{ color:#C7D2FE !important; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:1.5px; }}
-.hero-title {{ color:white !important; font-size:35px; line-height:1.1; font-weight:850; letter-spacing:-1.2px; margin:8px 0; }}
-.hero-text {{ color:rgba(255,255,255,.82) !important; font-size:14px; max-width:680px; line-height:1.6; }}
-.hero-pill {{ display:inline-block; margin-top:18px; padding:7px 12px; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); color:white !important; font-size:11px; }}
-
-.stat-card {{ background:{card}; border:1px solid {border}; border-radius:19px; padding:20px; min-height:130px; box-shadow:{shadow}; transition:transform .2s ease,border-color .2s ease; }}
-.stat-card:hover {{ transform:translateY(-4px); border-color:#818CF8; }}
-.stat-top {{ display:flex; justify-content:space-between; align-items:center; }}
-.stat-icon {{ width:39px; height:39px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:rgba(99,102,241,.16); font-size:19px; }}
-.stat-number {{ font-size:30px; font-weight:850; color:{text} !important; margin-top:13px; }}
-.stat-label {{ font-size:12px; color:{muted} !important; margin-top:2px; }}
-
-.panel {{ background:{card}; border:1px solid {border}; border-radius:20px; padding:22px; margin-top:22px; box-shadow:{shadow}; transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease; }}
-.panel:hover {{ transform:translateY(-2px); }}
-.panel-title {{ color:{text} !important; font-size:18px; font-weight:800; }}
-.panel-sub {{ color:{muted} !important; font-size:12px; margin-top:4px; }}
-
-.ai-panel {{ position:relative; overflow:hidden; border-radius:22px; padding:25px; margin-top:22px; background:radial-gradient(circle at 90% 20%,rgba(34,211,238,.18),transparent 30%),linear-gradient(135deg,#102A43,#123B4A); border:1px solid #3730A3; box-shadow:0 14px 35px rgba(79,70,229,.12); }}
-.ai-badge {{ display:inline-block; padding:5px 9px; border-radius:999px; background:rgba(34,211,238,.12); color:#818CF8 !important; font-size:10px; font-weight:800; letter-spacing:.8px; text-transform:uppercase; }}
-.ai-title {{ color:white !important; font-size:22px; font-weight:850; margin-top:10px; }}
-.ai-text {{ color:#CBD5E1 !important; font-size:13px; line-height:1.6; max-width:850px; }}
-.ai-panel::before {{ content:""; position:absolute; width:170px; height:170px; right:-60px; top:-70px; border-radius:50%; background:rgba(34,211,238,.10); filter:blur(3px); }}
-
-.page-banner {{ padding:22px 24px; border-radius:19px; background:{card}; border:1px solid {border}; box-shadow:{shadow}; margin-bottom:20px; }}
-.page-title {{ font-size:27px; font-weight:850; letter-spacing:-.7px; }}
-.page-sub {{ color:{muted} !important; font-size:13px; margin-top:4px; }}
-
-.quick-card {{ background:linear-gradient(145deg,{card},{card2}); border:1px solid {border}; border-radius:18px; padding:18px; min-height:105px; transition:transform .2s ease,border-color .2s ease; }}
-.quick-card:hover {{ transform:translateY(-3px); border-color:#818CF8; }}
-.quick-icon {{ font-size:22px; margin-bottom:8px; }}
-.quick-title {{ color:{text} !important; font-weight:800; font-size:14px; }}
-.quick-sub {{ color:{muted} !important; font-size:11px; margin-top:3px; }}
-.progress-shell {{ height:9px; border-radius:999px; background:{border}; overflow:hidden; margin-top:9px; }}
-.progress-bar {{ height:100%; border-radius:999px; background:linear-gradient(90deg,#4F46E5,#22D3EE); }}
-.section-kicker {{ color:#3730A3 !important; font-size:10px; font-weight:850; letter-spacing:1.3px; text-transform:uppercase; }}
-
-.auth-wrap {{ max-width:980px; margin:45px auto; padding:12px; }}
-.auth-card {{ background:{card}; border:1px solid {border}; border-radius:28px; box-shadow:0 20px 60px rgba(15,23,42,.10); overflow:hidden; }}
-.auth-brand {{ padding:34px 34px 24px; background:radial-gradient(circle at 100% 0%,rgba(34,211,238,.16),transparent 35%),linear-gradient(135deg,#3730A3,#3730A3); color:white; }}
-.auth-brand * {{ color:white !important; }}
-.auth-logo {{ width:50px; height:50px; display:flex; align-items:center; justify-content:center; border-radius:16px; background:rgba(255,255,255,.14); font-size:26px; margin-bottom:14px; }}
-.auth-title {{ font-size:30px; font-weight:850; letter-spacing:-.9px; }}
-.auth-sub {{ margin-top:7px; font-size:13px; color:rgba(255,255,255,.78) !important; line-height:1.6; }}
-.auth-note {{ background:{card2}; border:1px solid {border}; border-radius:14px; padding:12px 14px; color:{muted} !important; font-size:12px; margin-top:14px; }}
-.chat-shell {{ max-width:980px; margin:0 auto; padding-bottom:120px; }}
-.chat-header {{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 0 16px; border-bottom:1px solid {border}; margin-bottom:18px; }}
-.chat-brand {{ font-size:24px; font-weight:850; letter-spacing:-.7px; }}
-.chat-model {{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:{card2}; border:1px solid {border}; color:{muted} !important; font-size:11px; font-weight:750; }}
-.chat-welcome {{ text-align:center; padding:76px 20px 38px; }}
-.chat-welcome-icon {{ width:68px; height:68px; margin:0 auto 16px; border-radius:20px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4F46E5,#3730A3); color:white !important; font-size:32px; box-shadow:0 14px 30px rgba(79,70,229,.22); }}
-.chat-welcome-title {{ color:{text} !important; font-size:30px; font-weight:850; letter-spacing:-1px; }}
-.chat-welcome-sub {{ color:{muted} !important; font-size:13px; line-height:1.6; max-width:620px; margin:8px auto 22px; }}
-.prompt-card {{ background:{card}; border:1px solid {border}; border-radius:15px; padding:14px; text-align:left; min-height:88px; transition:transform .18s ease,border-color .18s ease; }}
-.prompt-card:hover {{ transform:translateY(-2px); border-color:#818CF8; }}
-.prompt-icon {{ font-size:20px; margin-bottom:7px; }}
-.prompt-title {{ color:{text} !important; font-size:12px; font-weight:800; }}
-.prompt-sub {{ color:{muted} !important; font-size:10px; margin-top:3px; }}
-.chat-history-title {{ color:{muted} !important; font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:1.1px; margin:14px 0 7px; }}
-.chat-history-button {{ font-size:11px !important; }}
-[data-testid="stChatMessage"] {{ border-radius:18px; padding:8px 14px; }}
-.user-box {{ padding:11px 10px; border:1px solid {border}; border-radius:14px; background:{card2}; margin:8px 0 10px; }}
-.user-name {{ font-size:13px; font-weight:800; }}
-.user-email {{ font-size:10px; color:{muted} !important; overflow-wrap:anywhere; margin-top:2px; }}
-.avatar {{ width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:#4F46E5; color:white !important; font-weight:850; margin-right:10px; flex-shrink:0; }}
-.user-row {{ display:flex; align-items:center; }}
-
-input, textarea {{ background:{card2} !important; color:{text} !important; caret-color:{text} !important; }}
-input::placeholder, textarea::placeholder {{ color:{muted} !important; }}
-div[data-baseweb="select"] > div {{ background:{card2} !important; color:{text} !important; border-color:{border} !important; }}
-div[data-baseweb="select"] span {{ color:{text} !important; }}
-div[data-baseweb="popover"],ul {{ background:{card} !important; }}
-li {{ color:{text} !important; }}
-
-[data-testid="stDataFrame"] {{ border:1px solid {border}; border-radius:14px; overflow:hidden; }}
-[data-testid="stDataFrame"] * {{ color:{text} !important; }}
-[data-testid="stMetric"] {{ background:{card}; border:1px solid {border}; border-radius:15px; padding:10px; }}
-hr {{ border-color:{border}; }}
-
-div.stButton > button {{ background:#4F46E5 !important; color:white !important; border:1px solid #3730A3 !important; border-radius:11px !important; min-height:42px; font-weight:750; box-shadow:0 6px 14px rgba(79,70,229,.14); transition:.2s ease; }}
-div.stButton > button:hover {{ background:#3730A3 !important; border-color:#3730A3 !important; transform:translateY(-1px); }}
-div.stButton > button p,div.stButton > button span {{ color:white !important; }}
-
-@media (max-width:900px) {{ .hero {{ padding:25px; }} .hero-title {{ font-size:28px; }} .panel {{ padding:17px; }} .auth-wrap {{ margin:20px auto; }} }}
-
-/* ============================================================
-   STUDIO-GRADE VISUAL SYSTEM
-   ============================================================ */
-:root {{
-  --ss-teal:#4F46E5;
-  --ss-teal-deep:#3730A3;
-  --ss-teal-soft:rgba(99,102,241,.16);
-}}
-
-/* App shell */
-[data-testid="stAppViewContainer"] {{
+html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.stApp { background:var(--ss-bg); color:var(--ss-text); }
+[data-testid="stAppViewContainer"] {
   background:
-    radial-gradient(circle at 15% 8%, rgba(79,70,229,.055), transparent 22%),
-    radial-gradient(circle at 92% 18%, rgba(59,130,246,.045), transparent 24%),
-    var(--ss-bg, #F4F7FB) !important;
-}}
-.main .block-container {{
-  max-width: 1480px;
-  padding-left: 2.1rem;
-  padding-right: 2.1rem;
-}}
+    radial-gradient(circle at 7% 0%, rgba(124,58,237,.028), transparent 18%),
+    radial-gradient(circle at 100% 12%, rgba(249,115,22,.022), transparent 16%),
+    var(--ss-bg) !important;
+}
+[data-testid="stHeader"] { background:transparent !important; }
+.main .block-container { max-width:1480px; padding:1.6rem 2rem 3.5rem; }
 
-/* Premium scrollbar */
-* {{
-  scrollbar-width: thin;
-  scrollbar-color: rgba(79,70,229,.38) transparent;
-}}
-*::-webkit-scrollbar {{ width:8px; height:8px; }}
-*::-webkit-scrollbar-track {{ background:transparent; }}
-*::-webkit-scrollbar-thumb {{ background:rgba(79,70,229,.35); border-radius:999px; }}
-*::-webkit-scrollbar-thumb:hover {{ background:rgba(79,70,229,.55); }}
+h1,h2,h3,h4,h5,h6,p,label,.stMarkdown,.stCaption { color:var(--ss-text) !important; }
+.stCaption { color:var(--ss-muted) !important; }
+hr { border-color:var(--ss-border) !important; }
+footer { visibility:hidden; }
 
 /* Sidebar */
-[data-testid="stSidebar"] {{
-  box-shadow: 12px 0 40px rgba(15,23,42,.04);
-}}
-[data-testid="stSidebarContent"] {{
-  padding: 1.05rem .85rem 1rem;
-}}
-[data-testid="stSidebar"] .brand {{
-  padding: .6rem .45rem 1.25rem;
-}}
-[data-testid="stSidebar"] .brand-name {{
-  font-size: 24px;
-  letter-spacing: -1px;
-}}
-[data-testid="stSidebar"] .logo {{
-  position:relative;
-  overflow:hidden;
-  box-shadow:0 10px 28px rgba(79,70,229,.24);
-}}
-[data-testid="stSidebar"] .logo::after {{
-  content:"";
-  position:absolute;
-  width:70px;
-  height:70px;
-  top:-45px;
-  right:-25px;
-  border-radius:50%;
-  background:rgba(255,255,255,.18);
-}}
+[data-testid="stSidebar"] {
+  background:var(--ss-surface) !important;
+  border-right:1px solid var(--ss-border) !important;
+  box-shadow:10px 0 35px rgba(15,23,42,.035);
+}
+[data-testid="stSidebarContent"] { padding:1rem .8rem 1.2rem; }
+[data-testid="stSidebar"] * { color:var(--ss-text) !important; }
+.brand { padding:.45rem .35rem 1.15rem; }
+.logo-row { display:flex; align-items:center; gap:11px; }
+.logo {
+  width:44px; height:44px; border-radius:14px; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(145deg,var(--ss-primary),var(--ss-primary-hover)); color:#fff !important;
+  font-size:22px; box-shadow:0 10px 24px rgba(37,99,235,.22); position:relative; overflow:hidden;
+}
+.logo:after { content:""; position:absolute; width:56px; height:56px; border-radius:50%; top:-36px; right:-20px; background:rgba(255,255,255,.17); }
+.brand-name { font-size:24px; font-weight:850; letter-spacing:-.9px; }
+.brand-tag { margin:6px 0 0 55px; color:var(--ss-muted) !important; font-size:10px; line-height:1.45; }
+.sidebar-label { color:var(--ss-muted) !important; text-transform:uppercase; letter-spacing:1.25px; font-size:9px; font-weight:850; margin:16px 0 7px; }
+.user-box { padding:10px; border:1px solid var(--ss-border); border-radius:14px; background:var(--ss-surface-2); }
+.user-row { display:flex; align-items:center; }
+.avatar { width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:var(--ss-primary); color:#fff !important; font-weight:850; margin-right:10px; flex-shrink:0; }
+.user-name { font-size:12px; font-weight:800; }
+.user-email { font-size:9px; color:var(--ss-muted) !important; overflow-wrap:anywhere; margin-top:2px; }
 
-/* Sidebar navigation polished as pill items */
-[data-testid="stSidebar"] div[role="radiogroup"] {{
-  gap: .28rem;
-}}
-[data-testid="stSidebar"] div[role="radiogroup"] > label {{
-  border-radius: 13px;
-  padding: .55rem .72rem;
-  margin: 0;
-  border: 1px solid transparent;
-  transition: background .18s ease, transform .18s ease, border-color .18s ease;
-}}
-[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
-  background: rgba(79,70,229,.07);
-  border-color: rgba(79,70,229,.14);
-  transform: translateX(2px);
-}}
-[data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {{
-  background: linear-gradient(90deg, rgba(79,70,229,.14), rgba(79,70,229,.05));
-  border-color: rgba(79,70,229,.24);
-  box-shadow: inset 3px 0 0 #4F46E5, 0 8px 18px rgba(79,70,229,.06);
-}}
-[data-testid="stSidebar"] div[role="radiogroup"] > label p {{
-  font-size: .86rem;
-  font-weight: 720;
-}}
-
-/* User account card */
-.user-box {{
-  box-shadow:0 10px 26px rgba(15,23,42,.045);
-  backdrop-filter:blur(10px);
-}}
-.avatar {{
-  box-shadow:0 7px 16px rgba(79,70,229,.22);
-}}
-
-/* Global controls */
-div.stButton > button,
-button[kind="primary"],
-button[kind="secondary"] {{
-  min-height: 43px;
-  border-radius: 12px !important;
-  font-weight: 760 !important;
-  letter-spacing: -.1px;
-}}
-div.stButton > button:hover {{
-  box-shadow: 0 10px 24px rgba(79,70,229,.18) !important;
-}}
+/* Radio navigation */
+[data-testid="stSidebar"] [role="radiogroup"] { gap:4px; }
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  border-radius:11px; padding:7px 10px; margin:0 !important; transition:.16s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:var(--ss-surface-2); }
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] { background:rgba(37,99,235,.09); }
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span { color:var(--ss-primary) !important; font-weight:800; }
 
 /* Inputs */
-div[data-baseweb="input"], div[data-baseweb="textarea"] {{
-  border-radius: 12px !important;
-}}
-div[data-baseweb="input"] > div,
-div[data-baseweb="textarea"] > div {{
-  border-radius: 12px !important;
-  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
-}}
-div[data-baseweb="input"] > div:focus-within,
-div[data-baseweb="textarea"] > div:focus-within {{
-  border-color:#22D3EE !important;
-  box-shadow:0 0 0 3px rgba(79,70,229,.10) !important;
-}}
+input, textarea {
+  background:var(--ss-surface) !important; color:var(--ss-text) !important;
+  caret-color:var(--ss-text) !important; border-radius:11px !important;
+}
+input::placeholder, textarea::placeholder { color:var(--ss-muted) !important; }
+div[data-baseweb="select"] > div {
+  background:var(--ss-surface) !important; color:var(--ss-text) !important; border-color:var(--ss-border) !important;
+  border-radius:11px !important;
+}
+div[data-baseweb="select"] span { color:var(--ss-text) !important; }
+div[data-baseweb="popover"], ul { background:var(--ss-surface) !important; }
+li { color:var(--ss-text) !important; }
 
-/* Selects */
-div[data-baseweb="select"] > div {{
-  border-radius:12px !important;
-  min-height:43px;
-}}
+/* Buttons */
+div.stButton > button {
+  min-height:42px; border-radius:11px !important; background:var(--ss-primary) !important;
+  border:1px solid var(--ss-primary-hover) !important; color:#fff !important;
+  font-weight:800; box-shadow:0 7px 18px rgba(37,99,235,.14); transition:transform .16s ease, background .16s ease, box-shadow .16s ease;
+}
+div.stButton > button:hover {
+  background:var(--ss-primary-hover) !important; transform:translateY(-1px); box-shadow:0 11px 24px rgba(37,99,235,.18);
+}
+div.stButton > button p, div.stButton > button span { color:#fff !important; }
 
-/* Cards */
-.stat-card {{
-  position:relative;
-  overflow:hidden;
-  backdrop-filter:blur(12px);
-}}
-.stat-card::after {{
-  content:"";
-  position:absolute;
-  width:120px;
-  height:120px;
-  right:-55px;
-  bottom:-65px;
-  border-radius:50%;
-  background:rgba(79,70,229,.06);
-  pointer-events:none;
-}}
-.quick-card,
-.panel,
-.page-banner,
-.auth-card {{
-  backdrop-filter: blur(12px);
-}}
-.panel,
-.page-banner {{
-  box-shadow: 0 14px 34px rgba(15,23,42,.055);
-}}
-.panel:hover,
-.stat-card:hover,
-.quick-card:hover {{
-  box-shadow: 0 18px 40px rgba(15,23,42,.085);
-}}
-
-/* Hero polish */
-.hero {{
-  min-height: 210px;
-  display:flex;
-  flex-direction:column;
-  justify-content:center;
-}}
-.hero::before {{
-  content:"";
-  position:absolute;
-  width:280px;
-  height:280px;
-  right:-90px;
-  bottom:-130px;
-  border:1px solid rgba(255,255,255,.10);
-  border-radius:50%;
-  box-shadow:0 0 0 38px rgba(255,255,255,.025), 0 0 0 76px rgba(255,255,255,.018);
-}}
-.hero-title {{ text-shadow:0 2px 18px rgba(0,0,0,.10); }}
-.hero-pill {{ backdrop-filter: blur(8px); }}
-
-/* Progress */
-.progress-shell {{
-  box-shadow: inset 0 1px 2px rgba(15,23,42,.08);
-}}
-.progress-bar {{
-  position:relative;
-  box-shadow:0 4px 12px rgba(79,70,229,.22);
-}}
-.progress-bar::after {{
-  content:"";
-  position:absolute;
-  inset:0;
-  background:linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent);
-  transform:translateX(-100%);
-  animation:ssProgressShimmer 2.8s ease-in-out infinite;
-}}
-@keyframes ssProgressShimmer {{
-  0% {{ transform:translateX(-100%); }}
-  70%,100% {{ transform:translateX(100%); }}
-}}
-
-/* Empty/info states */
-[data-testid="stAlert"] {{
-  border-radius:14px !important;
-  border-width:1px !important;
-  box-shadow:0 8px 22px rgba(15,23,42,.04);
-}}
-
-/* Dataframes */
-[data-testid="stDataFrame"] {{
-  box-shadow:0 8px 22px rgba(15,23,42,.04);
-}}
-
-/* Chat interface */
-.chat-shell {{
-  max-width: 1000px;
-  margin: 0 auto;
-}}
-.chat-header {{
-  position:sticky;
-  top:0;
-  z-index:20;
-  background:color-mix(in srgb, var(--ss-card, #fff) 86%, transparent);
-  backdrop-filter:blur(16px);
-  padding: .65rem 0 .85rem;
-}}
-.chat-brand {{
-  font-size:26px;
-}}
-.chat-model {{
-  box-shadow:0 7px 18px rgba(15,23,42,.045);
-}}
-.chat-welcome {{
-  padding-top:68px;
-}}
-.chat-welcome-icon {{
-  position:relative;
-  animation:ssFloat 3.6s ease-in-out infinite;
-}}
-.chat-welcome-icon::after {{
-  content:"";
-  position:absolute;
-  inset:-7px;
-  border-radius:23px;
-  border:1px solid rgba(79,70,229,.20);
-  animation:ssRing 2.8s ease-out infinite;
-}}
-@keyframes ssFloat {{
-  0%,100% {{ transform:translateY(0); }}
-  50% {{ transform:translateY(-5px); }}
-}}
-@keyframes ssRing {{
-  0% {{ opacity:.55; transform:scale(1); }}
-  100% {{ opacity:0; transform:scale(1.17); }}
-}}
-.prompt-card {{
-  box-shadow:0 10px 24px rgba(15,23,42,.045);
-}}
-
-/* Native Streamlit chat bubbles */
-[data-testid="stChatMessage"] {{
-  border:1px solid rgba(148,163,184,.12);
-  box-shadow:0 8px 26px rgba(15,23,42,.035);
-  margin-bottom:14px;
-}}
-[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {{
-  line-height:1.72;
-}}
-/* User bubble gets a subtle tinted surface */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {{
-  background:linear-gradient(145deg, rgba(79,70,229,.07), rgba(79,70,229,.025));
-}}
-/* Assistant bubble stays crisp */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {{
-  background:var(--ss-chat-assistant, rgba(255,255,255,.86));
-}}
-
-/* Chat input */
-[data-testid="stChatInput"] {{
-  max-width:1000px;
-  margin-left:auto;
-  margin-right:auto;
-}}
-[data-testid="stChatInput"] > div {{
-  border-radius:18px !important;
-  border:1px solid rgba(148,163,184,.24) !important;
-  box-shadow:0 12px 32px rgba(15,23,42,.09) !important;
-  transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;
-}}
-[data-testid="stChatInput"] > div:focus-within {{
-  border-color:#818CF8 !important;
-  box-shadow:0 16px 38px rgba(79,70,229,.14), 0 0 0 3px rgba(79,70,229,.07) !important;
-  transform:translateY(-1px);
-}}
-[data-testid="stChatInput"] textarea {{
-  min-height:54px !important;
-}}
-
-/* Metrics */
-[data-testid="stMetric"] {{
-  border-radius:16px !important;
-  box-shadow:0 9px 22px rgba(15,23,42,.045);
-}}
-
-/* Auth screen */
-.auth-wrap {{ max-width:1040px; }}
-.auth-card {{
-  box-shadow:0 26px 80px rgba(15,23,42,.12);
-}}
-.auth-brand {{
-  position:relative;
-  overflow:hidden;
-}}
-.auth-brand::after {{
-  content:"";
-  position:absolute;
-  width:310px;
-  height:310px;
-  right:-130px;
-  top:-180px;
-  border-radius:50%;
-  border:1px solid rgba(255,255,255,.10);
-  box-shadow:0 0 0 35px rgba(255,255,255,.025),0 0 0 70px rgba(255,255,255,.018);
-}}
-.auth-logo {{
-  position:relative;
-  z-index:1;
-  box-shadow:0 10px 24px rgba(0,0,0,.10);
-}}
-
-/* Footer */
-footer {{ visibility:hidden; }}
-
-/* Reduced-motion accessibility */
-@media (prefers-reduced-motion: reduce) {{
-  *, *::before, *::after {{
-    animation-duration:.01ms !important;
-    animation-iteration-count:1 !important;
-    transition-duration:.01ms !important;
-    scroll-behavior:auto !important;
-  }}
-}}
-
-@media (max-width: 900px) {{
-  .main .block-container {{ padding-left:1rem; padding-right:1rem; }}
-  .hero {{ min-height:180px; }}
-  .chat-welcome {{ padding-top:44px; }}
-  .chat-brand {{ font-size:21px; }}
-}}
-
-
-/* ============================================================
-   EXECUTIVE DASHBOARD / UX POLISH
-   ============================================================ */
-.dashboard-wrap {{ animation:floatIn .48s ease-out; }}
-.dashboard-hero {{
-  position:relative; overflow:hidden; display:grid;
-  grid-template-columns:minmax(0,1.7fr) minmax(250px,.75fr); gap:24px; align-items:stretch;
-  min-height:255px; padding:32px; border-radius:28px; margin-bottom:20px;
-  background:radial-gradient(circle at 78% 18%,rgba(34,211,238,.30),transparent 20%),radial-gradient(circle at 96% 72%,rgba(59,130,246,.20),transparent 24%),linear-gradient(135deg,#312E81 0%,#3730A3 46%,#10233A 100%);
-  box-shadow:0 24px 55px rgba(55,48,163,.20);
-}}
-.dashboard-hero::before {{
-  content:""; position:absolute; width:420px; height:420px; right:-175px; top:-235px; border-radius:50%;
-  border:1px solid rgba(255,255,255,.10); box-shadow:0 0 0 34px rgba(255,255,255,.025),0 0 0 68px rgba(255,255,255,.018);
-}}
-.dashboard-hero-copy {{ position:relative; z-index:2; align-self:center; }}
-.dashboard-hero-kicker {{ color:#C7D2FE !important; font-size:10px; font-weight:850; letter-spacing:1.6px; text-transform:uppercase; }}
-.dashboard-hero-title {{ color:white !important; font-size:38px; font-weight:880; line-height:1.08; letter-spacing:-1.35px; margin-top:8px; max-width:760px; }}
-.dashboard-hero-sub {{ color:rgba(255,255,255,.80) !important; font-size:13px; line-height:1.7; max-width:720px; margin-top:10px; }}
-.dashboard-hero-meta {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:17px; }}
-.dashboard-pill {{ display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.15); color:white !important; font-size:10px; font-weight:700; backdrop-filter:blur(10px); }}
-.dashboard-orbit {{ position:relative; min-height:190px; display:flex; align-items:center; justify-content:center; z-index:2; }}
-.orbit-ring {{ position:absolute; width:178px; height:178px; border-radius:50%; border:1px solid rgba(255,255,255,.11); box-shadow:0 0 0 20px rgba(255,255,255,.02),inset 0 0 25px rgba(34,211,238,.04); }}
-.orbit-ring-small {{ width:124px; height:124px; border-color:rgba(34,211,238,.21); }}
-.orbit-core {{ width:78px; height:78px; border-radius:24px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#22D3EE,#4F46E5); color:white !important; font-size:34px; box-shadow:0 16px 34px rgba(0,0,0,.20); animation:ssFloat 3.8s ease-in-out infinite; }}
-.orbit-dot {{ position:absolute; width:9px; height:9px; border-radius:50%; background:#C7D2FE; box-shadow:0 0 0 7px rgba(199,210,254,.08),0 0 18px rgba(199,210,254,.35); }}
-.orbit-dot-one {{ top:12%; right:25%; }}
-.orbit-dot-two {{ bottom:15%; left:18%; width:7px; height:7px; background:#93C5FD; box-shadow:0 0 0 7px rgba(147,197,253,.08),0 0 18px rgba(147,197,253,.28); }}
-.dashboard-stat-grid {{ margin-bottom:8px; }}
-.dashboard-stat {{ position:relative; overflow:hidden; min-height:146px; padding:20px; border-radius:20px; background:{card}; border:1px solid {border}; box-shadow:0 12px 28px rgba(15,23,42,.045); transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease; }}
-.dashboard-stat:hover {{ transform:translateY(-4px); border-color:rgba(79,70,229,.36); box-shadow:0 18px 34px rgba(15,23,42,.075); }}
-.dashboard-stat::after {{ content:""; position:absolute; width:100px; height:100px; right:-46px; bottom:-55px; border-radius:50%; background:rgba(79,70,229,.07); }}
-.dashboard-stat-label {{ color:{muted} !important; font-size:11px; font-weight:750; }}
-.dashboard-stat-value {{ color:{text} !important; font-size:31px; font-weight:880; letter-spacing:-1px; margin-top:15px; }}
-.dashboard-stat-foot {{ color:{muted} !important; font-size:10px; margin-top:3px; }}
-.dashboard-stat-icon {{ width:41px; height:41px; border-radius:13px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#EEF2FF,#E0E7FF); font-size:20px; box-shadow:inset 0 0 0 1px rgba(79,70,229,.10); }}
-.dashboard-section {{ margin-top:23px; }}
-.dashboard-section-head {{ display:flex; justify-content:space-between; align-items:flex-end; gap:15px; margin-bottom:11px; }}
-.dashboard-section-title {{ color:{text} !important; font-size:18px; font-weight:850; letter-spacing:-.4px; }}
-.dashboard-section-sub {{ color:{muted} !important; font-size:11px; margin-top:3px; }}
-.dashboard-action-panel {{ padding:8px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
-.dashboard-action-panel .stButton {{ margin:0 !important; }}
-.dashboard-action-panel div.stButton > button {{ min-height:104px !important; text-align:left !important; padding:17px 18px !important; border-radius:16px !important; border:1px solid transparent !important; background:linear-gradient(145deg,{card},{card2}) !important; color:{text} !important; box-shadow:none !important; }}
-.dashboard-action-panel div.stButton > button:hover {{ background:linear-gradient(145deg,{card2},{card}) !important; border-color:rgba(79,70,229,.28) !important; transform:translateY(-2px); box-shadow:0 12px 22px rgba(15,23,42,.07) !important; }}
-.dashboard-action-panel div.stButton > button p, .dashboard-action-panel div.stButton > button span {{ color:{text} !important; font-size:13px !important; font-weight:820 !important; }}
-.dashboard-focus {{ position:relative; overflow:hidden; padding:23px; border-radius:22px; background:linear-gradient(145deg,{card},{card2}); border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
-.dashboard-focus::after {{ content:""; position:absolute; width:180px; height:180px; right:-100px; top:-90px; border-radius:50%; background:rgba(79,70,229,.07); }}
-.focus-row {{ display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid {border}; }}
-.focus-row:last-child {{ border-bottom:0; }}
-.focus-icon {{ width:34px; height:34px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:{card2}; border:1px solid {border}; flex-shrink:0; }}
-.focus-main {{ min-width:0; flex:1; }}
-.focus-name {{ color:{text} !important; font-size:12px; font-weight:780; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-.focus-detail {{ color:{muted} !important; font-size:10px; margin-top:2px; }}
-.focus-badge {{ padding:5px 8px; border-radius:999px; font-size:9px; font-weight:800; background:rgba(79,70,229,.09); color:#3730A3 !important; border:1px solid rgba(79,70,229,.15); white-space:nowrap; }}
-.dashboard-progress {{ padding:23px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 34px rgba(15,23,42,.05); }}
-.progress-ring {{ width:116px; height:116px; border-radius:50%; margin:2px auto 0; display:flex; align-items:center; justify-content:center; background:conic-gradient(#4F46E5 calc(var(--progress) * 1%), {border} 0); position:relative; }}
-.progress-ring::before {{ content:""; width:88px; height:88px; border-radius:50%; background:{card}; position:absolute; }}
-.progress-ring-value {{ position:relative; z-index:1; color:{text} !important; font-size:24px; font-weight:880; }}
-.progress-detail {{ text-align:center; color:{muted} !important; font-size:10px; margin-top:8px; }}
-.dashboard-empty {{ padding:20px; border:1px dashed {border}; border-radius:16px; color:{muted} !important; font-size:11px; background:{card2}; }}
-.dashboard-ai-banner {{ display:flex; align-items:center; justify-content:space-between; gap:18px; padding:21px 23px; border-radius:20px; margin-top:22px; background:linear-gradient(135deg,#3730A3,#3730A3 54%,#123047); border:1px solid rgba(129,140,248,.18); box-shadow:0 18px 36px rgba(55,48,163,.16); }}
-.dashboard-ai-copy {{ min-width:0; }}
-.dashboard-ai-title {{ color:white !important; font-size:16px; font-weight:850; }}
-.dashboard-ai-sub {{ color:rgba(255,255,255,.72) !important; font-size:11px; line-height:1.55; margin-top:4px; }}
-.dashboard-ai-badge {{ flex-shrink:0; padding:8px 11px; border-radius:999px; background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14); color:rgba(99,102,241,.16) !important; font-size:10px; font-weight:800; }}
-@media (max-width:900px) {{ .dashboard-hero {{ grid-template-columns:1fr; padding:25px; }} .dashboard-orbit {{ min-height:145px; }} .dashboard-hero-title {{ font-size:29px; }} .dashboard-ai-banner {{ align-items:flex-start; flex-direction:column; }} }}
-
-
-/* ============================================================
-   STUDYSPHERE ELITE UI — FINAL DESIGN OVERRIDES
-   ============================================================ */
-body {{ scroll-behavior:smooth; }}
-[data-testid="stToolbar"], [data-testid="stDecoration"] {{ display:none !important; }}
-.main .block-container {{ max-width:1540px !important; padding:1.15rem 2.4rem 3.5rem !important; }}
-
-/* Sidebar */
-[data-testid="stSidebar"] {{
-  background:linear-gradient(180deg,{sidebar_bg},{bg}) !important;
-  box-shadow:16px 0 48px rgba(15,23,42,.05) !important;
-}}
-[data-testid="stSidebarContent"] {{ padding:1rem .72rem 1rem !important; }}
-[data-testid="stSidebar"] .brand {{ padding:.55rem .42rem 1.18rem !important; }}
-[data-testid="stSidebar"] .brand-name {{ font-size:24px; letter-spacing:-1px; }}
-[data-testid="stSidebar"] .logo {{
-  position:relative; overflow:hidden;
-  box-shadow:0 11px 28px rgba(79,70,229,.24) !important;
-}}
-[data-testid="stSidebar"] .logo::after {{
-  content:""; position:absolute; width:70px; height:70px; top:-44px; right:-28px;
-  border-radius:50%; background:rgba(255,255,255,.18);
-}}
-[data-testid="stSidebar"] [data-testid="stRadio"] > div > label {{
-  border-radius:12px !important; padding:7px 9px !important; transition:.18s ease !important;
-}}
-[data-testid="stSidebar"] [data-testid="stRadio"] > div > label:hover {{
-  background:rgba(79,70,229,.08) !important; transform:translateX(2px);
-}}
-
-/* Global controls */
-div.stButton > button {{
-  min-height:44px !important; border-radius:13px !important;
-  background:linear-gradient(135deg,#4F46E5,#3730A3) !important;
-  border:1px solid rgba(79,70,229,.22) !important;
-  box-shadow:0 8px 18px rgba(79,70,229,.13) !important;
-  transition:transform .18s ease, box-shadow .18s ease !important;
-}}
-div.stButton > button:hover {{
-  background:linear-gradient(135deg,#22D3EE,#3730A3) !important;
-  transform:translateY(-2px) !important;
-  box-shadow:0 13px 25px rgba(79,70,229,.21) !important;
-}}
+/* General surfaces */
+.page-banner {
+  padding:20px 22px; border-radius:18px; background:var(--ss-surface); border:1px solid var(--ss-border);
+  box-shadow:var(--ss-shadow); margin-bottom:18px;
+}
+.page-title { font-size:27px; font-weight:900; letter-spacing:-.8px; }
+.page-sub { color:var(--ss-muted) !important; font-size:12px; margin-top:4px; }
+.panel {
+  background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:20px; padding:20px;
+  box-shadow:var(--ss-shadow); transition:.18s ease;
+}
+.panel:hover { box-shadow:0 16px 38px rgba(15,23,42,.065); }
+.panel-title { color:var(--ss-text) !important; font-size:16px; font-weight:850; }
+.panel-sub { color:var(--ss-muted) !important; font-size:10px; margin-top:3px; }
+.section-kicker { color:var(--ss-primary) !important; font-size:9px; font-weight:900; letter-spacing:1.25px; text-transform:uppercase; }
+[data-testid="stMetric"] { background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:15px; padding:11px; box-shadow:0 8px 22px rgba(15,23,42,.04); }
+[data-testid="stDataFrame"] { border:1px solid var(--ss-border); border-radius:13px; overflow:hidden; box-shadow:0 7px 18px rgba(15,23,42,.03); }
 
 /* Hero */
-.elite-page {{ animation:floatIn .42s ease-out; }}
-.elite-hero {{
-  position:relative; overflow:hidden; display:grid;
-  grid-template-columns:minmax(0,1.5fr) minmax(260px,.75fr); gap:14px;
-  min-height:275px; padding:34px; border-radius:30px;
-  background:
-    radial-gradient(circle at 80% 20%,rgba(34,211,238,.24),transparent 22%),
-    radial-gradient(circle at 20% 115%,rgba(96,165,250,.15),transparent 27%),
-    linear-gradient(135deg,#1E1B4B,#3730A3 57%,#123047);
-  box-shadow:0 26px 62px rgba(55,48,163,.19);
-}}
-.elite-hero:before {{
-  content:""; position:absolute; width:390px; height:390px; right:-155px; top:-195px;
-  border-radius:50%; border:1px solid rgba(255,255,255,.10);
-  box-shadow:0 0 0 30px rgba(255,255,255,.02),0 0 0 60px rgba(255,255,255,.014);
-}}
-.elite-copy {{ position:relative; z-index:2; align-self:center; }}
-.elite-kicker {{ color:#C7D2FE !important; font-size:10px; font-weight:900; letter-spacing:1.75px; text-transform:uppercase; }}
-.elite-title {{ color:white !important; font-size:43px; line-height:1.04; letter-spacing:-1.7px; font-weight:900; margin-top:9px; }}
-.elite-title span {{ color:#818CF8 !important; }}
-.elite-sub {{ color:rgba(255,255,255,.77) !important; font-size:13px; line-height:1.75; margin-top:12px; max-width:710px; }}
-.elite-pills {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }}
-.elite-pill {{ padding:8px 11px; border-radius:999px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.08); color:white !important; font-size:10px; font-weight:750; }}
-.elite-orbit {{ position:relative; min-height:215px; display:flex; align-items:center; justify-content:center; z-index:2; }}
-.elite-orbit-ring {{ position:absolute; width:184px; height:184px; border-radius:50%; border:1px solid rgba(255,255,255,.12); box-shadow:0 0 0 26px rgba(255,255,255,.02); }}
-.elite-orbit-ring.small {{ width:128px; height:128px; border-color:rgba(129,140,248,.20); box-shadow:none; }}
-.elite-orbit-core {{ width:92px; height:92px; border-radius:28px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#818CF8,#4F46E5); color:#1E1B4B !important; font-size:38px; box-shadow:0 19px 36px rgba(0,0,0,.22); animation:ssFloat 4s ease-in-out infinite; }}
-.elite-orbit-dot {{ position:absolute; width:9px; height:9px; border-radius:50%; background:#C7D2FE; box-shadow:0 0 0 7px rgba(199,210,254,.08),0 0 22px rgba(199,210,254,.42); }}
-.elite-orbit-dot.one {{ top:18%; right:25%; }}
-.elite-orbit-dot.two {{ bottom:17%; left:17%; width:7px; height:7px; background:#93C5FD; box-shadow:0 0 0 7px rgba(147,197,253,.08),0 0 20px rgba(147,197,253,.32); }}
+.dashboard-shell { animation:fadeUp .45s ease-out; }
+.dashboard-hero {
+  position:relative; overflow:hidden; display:grid; grid-template-columns:minmax(0,1.55fr) minmax(250px,.7fr); gap:22px;
+  min-height:250px; padding:30px; margin-bottom:18px; border-radius:26px;
+  background:linear-gradient(135deg,#0F1F3D 0%, #173A73 48%, #2563EB 100%);
+  box-shadow:0 24px 55px rgba(30,64,175,.20);
+}
+.dashboard-hero:before {
+  content:""; position:absolute; width:360px; height:360px; right:-170px; top:-185px; border-radius:50%;
+  border:1px solid rgba(255,255,255,.10); box-shadow:0 0 0 32px rgba(255,255,255,.022),0 0 0 64px rgba(255,255,255,.016);
+}
+.dashboard-hero:after {
+  content:""; position:absolute; width:120px; height:120px; right:110px; bottom:-80px; border-radius:50%; background:rgba(245,158,11,.14); filter:blur(2px);
+}
+.dashboard-hero-copy { position:relative; z-index:2; align-self:center; }
+.dashboard-hero-kicker { color:#BFDBFE !important; font-size:9px; font-weight:900; letter-spacing:1.5px; text-transform:uppercase; }
+.dashboard-hero-title { color:#fff !important; font-size:39px; line-height:1.08; font-weight:900; letter-spacing:-1.45px; margin-top:8px; max-width:760px; }
+.dashboard-hero-title .accent { color:#FDE68A !important; }
+.dashboard-hero-sub { color:rgba(255,255,255,.76) !important; font-size:12px; line-height:1.7; max-width:690px; margin-top:10px; }
+.dashboard-hero-meta { display:flex; flex-wrap:wrap; gap:7px; margin-top:17px; }
+.dashboard-pill { padding:6px 9px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color:#fff !important; font-size:9px; font-weight:750; }
+.hero-side {
+  position:relative; z-index:2; align-self:stretch; display:flex; flex-direction:column; justify-content:center;
+  padding:16px; border-radius:20px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13); backdrop-filter:blur(12px);
+}
+.hero-side-label { color:#BFDBFE !important; font-size:9px; font-weight:850; letter-spacing:1px; text-transform:uppercase; }
+.hero-side-number { color:#fff !important; font-size:42px; font-weight:900; line-height:1; margin-top:8px; }
+.hero-side-caption { color:rgba(255,255,255,.68) !important; font-size:9px; margin-top:5px; line-height:1.5; }
+.hero-side-bar { height:7px; background:rgba(255,255,255,.10); border-radius:999px; overflow:hidden; margin-top:14px; }
+.hero-side-fill { height:100%; background:linear-gradient(90deg,#60A5FA,#FBBF24); border-radius:999px; }
 
-/* KPI cards */
-.elite-kpi-grid {{ margin-top:18px; }}
-.elite-kpi {{ position:relative; overflow:hidden; min-height:146px; padding:20px; border-radius:22px; background:{card}; border:1px solid {border}; box-shadow:0 14px 32px rgba(15,23,42,.05); transition:.2s ease; }}
-.elite-kpi:hover {{ transform:translateY(-4px); border-color:rgba(79,70,229,.34); box-shadow:0 20px 42px rgba(15,23,42,.08); }}
-.elite-kpi:after {{ content:""; position:absolute; width:112px; height:112px; right:-58px; bottom:-63px; border-radius:50%; background:rgba(79,70,229,.07); }}
-.elite-kpi-top {{ display:flex; align-items:center; justify-content:space-between; }}
-.elite-kpi-icon {{ width:43px; height:43px; border-radius:14px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,#EEF2FF,#E0E7FF); font-size:20px; }}
-.elite-kpi-label {{ color:{muted} !important; font-size:10px; font-weight:850; letter-spacing:.6px; margin-top:15px; }}
-.elite-kpi-value {{ color:{text} !important; font-size:33px; line-height:1; font-weight:900; letter-spacing:-1.3px; margin-top:8px; }}
-.elite-kpi-foot {{ color:{muted} !important; font-size:10px; margin-top:6px; }}
+/* KPIs */
+.dashboard-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.kpi {
+  min-height:122px; padding:18px; border-radius:18px; background:var(--ss-surface); border:1px solid var(--ss-border);
+  box-shadow:0 10px 25px rgba(15,23,42,.04); transition:.18s ease; position:relative; overflow:hidden;
+}
+.kpi:hover { transform:translateY(-3px); border-color:rgba(37,99,235,.25); box-shadow:0 17px 32px rgba(15,23,42,.07); }
+.kpi:after { content:""; position:absolute; width:80px; height:80px; right:-44px; bottom:-44px; border-radius:50%; background:var(--primary-soft); }
+.kpi-icon { width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:var(--ss-primary-soft); font-size:18px; }
+.kpi-label { color:var(--ss-muted) !important; font-size:9px; font-weight:850; letter-spacing:.55px; margin-top:13px; text-transform:uppercase; }
+.kpi-value { color:var(--ss-text) !important; font-size:30px; font-weight:900; letter-spacing:-1px; margin-top:4px; }
+.kpi-foot { color:var(--ss-muted) !important; font-size:9px; margin-top:3px; }
 
-/* Sections and actions */
-.elite-section {{ margin-top:25px; }}
-.elite-section-head {{ display:flex; justify-content:space-between; align-items:flex-end; gap:15px; margin-bottom:11px; }}
-.elite-section-title {{ color:{text} !important; font-size:18px; font-weight:900; letter-spacing:-.45px; }}
-.elite-section-sub {{ color:{muted} !important; font-size:11px; margin-top:3px; }}
-.elite-action-shell {{ padding:8px; border-radius:24px; background:{card}; border:1px solid {border}; box-shadow:0 15px 35px rgba(15,23,42,.045); }}
-.elite-action-shell [data-testid="column"] {{ padding:4px; }}
-.elite-action-shell div.stButton > button {{ min-height:112px !important; text-align:left !important; justify-content:flex-start !important; align-items:flex-start !important; padding:18px !important; border-radius:17px !important; background:{card2} !important; border:1px solid {border} !important; color:{text} !important; box-shadow:none !important; }}
-.elite-action-shell div.stButton > button:hover {{ background:linear-gradient(145deg,{card2},{card}) !important; border-color:rgba(79,70,229,.35) !important; box-shadow:0 12px 24px rgba(15,23,42,.07) !important; }}
-.elite-action-shell div.stButton > button p, .elite-action-shell div.stButton > button span {{ color:{text} !important; font-size:13px !important; font-weight:850 !important; }}
+/* Quick actions */
+.dashboard-section { margin-top:23px; }
+.section-head { display:flex; justify-content:space-between; align-items:flex-end; gap:15px; margin-bottom:10px; }
+.section-title { color:var(--ss-text) !important; font-size:18px; font-weight:900; letter-spacing:-.45px; }
+.section-sub { color:var(--ss-muted) !important; font-size:10px; margin-top:3px; }
+.dashboard-actions { padding:7px; border:1px solid var(--ss-border); border-radius:20px; background:var(--ss-surface); box-shadow:0 12px 28px rgba(15,23,42,.04); }
+.dashboard-actions [data-testid="column"] { padding:4px; }
+.dashboard-actions div.stButton > button {
+  min-height:96px !important; border-radius:16px !important; text-align:left !important; justify-content:flex-start !important; align-items:flex-start !important;
+  padding:16px !important; background:var(--ss-surface-2) !important; border:1px solid var(--ss-border) !important;
+  box-shadow:none !important; color:var(--ss-text) !important;
+}
+.dashboard-actions div.stButton > button:hover { background:var(--ss-surface) !important; border-color:rgba(37,99,235,.32) !important; }
+.dashboard-actions div.stButton > button p, .dashboard-actions div.stButton > button span { color:var(--ss-text) !important; font-weight:850 !important; font-size:12px !important; }
 
-/* Panels */
-.elite-panel {{ background:{card}; border:1px solid {border}; border-radius:23px; padding:21px; box-shadow:0 15px 36px rgba(15,23,42,.05); }}
-.elite-panel-title {{ color:{text} !important; font-size:16px; font-weight:900; }}
-.elite-panel-sub {{ color:{muted} !important; font-size:10px; margin-top:4px; }}
-.elite-focus-row {{ display:flex; align-items:center; gap:11px; padding:12px 0; border-bottom:1px solid {border}; }}
-.elite-focus-row:last-child {{ border-bottom:0; }}
-.elite-focus-icon {{ width:35px; height:35px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:{card2}; border:1px solid {border}; flex-shrink:0; }}
-.elite-focus-main {{ flex:1; min-width:0; }}
-.elite-focus-name {{ color:{text} !important; font-size:12px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-.elite-focus-detail {{ color:{muted} !important; font-size:10px; margin-top:2px; }}
-.elite-focus-badge {{ flex-shrink:0; padding:5px 8px; border-radius:999px; background:rgba(79,70,229,.08); color:#3730A3 !important; border:1px solid rgba(79,70,229,.14); font-size:9px; font-weight:900; }}
+/* Focus + progress */
+.dashboard-grid-2 { display:grid; grid-template-columns:1.45fr 1fr; gap:14px; }
+.focus-card, .progress-card { background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:20px; padding:20px; box-shadow:0 12px 28px rgba(15,23,42,.04); }
+.focus-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--ss-border); }
+.focus-row:last-child { border-bottom:0; }
+.focus-icon { width:33px; height:33px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--ss-surface-2); border:1px solid var(--ss-border); flex-shrink:0; }
+.focus-main { flex:1; min-width:0; }
+.focus-name { color:var(--ss-text) !important; font-size:11px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.focus-detail { color:var(--ss-muted) !important; font-size:9px; margin-top:2px; }
+.focus-badge { padding:4px 7px; border-radius:999px; font-size:8px; font-weight:850; color:var(--ss-primary) !important; background:var(--ss-primary-soft); border:1px solid rgba(37,99,235,.12); }
+.progress-layout { display:grid; grid-template-columns:126px 1fr; gap:19px; align-items:center; }
+.progress-ring { width:118px; height:118px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; background:conic-gradient(var(--ss-primary) calc(var(--progress) * 1%), var(--ss-border) 0); }
+.progress-ring:before { content:""; position:absolute; width:88px; height:88px; border-radius:50%; background:var(--ss-surface); }
+.progress-ring-text { position:relative; z-index:1; color:var(--ss-text) !important; font-size:23px; font-weight:900; }
+.progress-heading { color:var(--ss-text) !important; font-size:13px; font-weight:900; }
+.progress-copy { color:var(--ss-muted) !important; font-size:9px; line-height:1.6; margin-top:5px; }
+.mini-bar { height:7px; border-radius:999px; background:var(--ss-border); overflow:hidden; margin-top:10px; }
+.mini-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,var(--ss-primary),var(--ss-accent)); }
 
-/* Progress */
-.elite-progress {{ display:grid; grid-template-columns:145px 1fr; gap:22px; align-items:center; }}
-.elite-ring {{ width:126px; height:126px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:conic-gradient(#4F46E5 calc(var(--progress) * 1%), {border} 0); position:relative; }}
-.elite-ring:before {{ content:""; width:94px; height:94px; border-radius:50%; background:{card}; position:absolute; }}
-.elite-ring-text {{ position:relative; z-index:1; color:{text} !important; font-size:25px; font-weight:900; }}
-.elite-progress-copy h4 {{ color:{text} !important; font-size:14px; font-weight:900; margin:0; }}
-.elite-progress-copy p {{ color:{muted} !important; font-size:10px; line-height:1.6; margin-top:5px; }}
-.elite-mini-bar {{ height:8px; margin-top:10px; border-radius:999px; background:{border}; overflow:hidden; }}
-.elite-mini-fill {{ height:100%; border-radius:999px; background:linear-gradient(90deg,#4F46E5,#818CF8); }}
+/* Deadline blocks */
+.radar-card { background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:20px; padding:20px; box-shadow:0 12px 28px rgba(15,23,42,.04); }
+.radar-list { margin-top:12px; }
+.radar-item { display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--ss-border); }
+.radar-item:last-child { border-bottom:0; }
+.radar-date { width:44px; height:44px; border-radius:13px; background:var(--ss-surface-2); border:1px solid var(--ss-border); display:flex; flex-direction:column; align-items:center; justify-content:center; flex-shrink:0; }
+.radar-day { color:var(--ss-text) !important; font-size:15px; font-weight:900; line-height:1; }
+.radar-month { color:var(--ss-muted) !important; font-size:7px; font-weight:850; text-transform:uppercase; margin-top:3px; }
+.radar-main { flex:1; min-width:0; }
+.radar-name { color:var(--ss-text) !important; font-size:11px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.radar-meta { color:var(--ss-muted) !important; font-size:9px; margin-top:2px; }
 
 /* AI banner */
-.elite-ai {{ position:relative; overflow:hidden; display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:24px; padding:23px 25px; border-radius:22px; background:linear-gradient(135deg,#1E1B4B,#3730A3 56%,#123047); border:1px solid rgba(129,140,248,.18); box-shadow:0 21px 44px rgba(55,48,163,.16); }}
-.elite-ai:after {{ content:""; position:absolute; right:-75px; top:-90px; width:220px; height:220px; border-radius:50%; border:1px solid rgba(255,255,255,.08); box-shadow:0 0 0 25px rgba(255,255,255,.018),0 0 0 50px rgba(255,255,255,.012); }}
-.elite-ai-copy {{ position:relative; z-index:2; }}
-.elite-ai-title {{ color:white !important; font-size:17px; font-weight:900; }}
-.elite-ai-sub {{ color:rgba(255,255,255,.72) !important; font-size:11px; line-height:1.6; margin-top:4px; }}
-.elite-ai-badge {{ position:relative; z-index:2; flex-shrink:0; padding:8px 11px; border-radius:999px; color:rgba(99,102,241,.16) !important; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); font-size:10px; font-weight:850; }}
+.ai-cta {
+  display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:22px; padding:19px 21px; border-radius:20px;
+  background:linear-gradient(135deg,#0F1F3D,#173A73 55%,#2563EB); border:1px solid rgba(96,165,250,.22);
+  box-shadow:0 18px 38px rgba(30,64,175,.16); overflow:hidden; position:relative;
+}
+.ai-cta:after { content:""; position:absolute; width:200px; height:200px; right:-95px; top:-100px; border-radius:50%; border:1px solid rgba(255,255,255,.09); box-shadow:0 0 0 25px rgba(255,255,255,.018),0 0 0 50px rgba(255,255,255,.012); }
+.ai-cta-copy { position:relative; z-index:2; }
+.ai-cta-title { color:#fff !important; font-size:16px; font-weight:900; }
+.ai-cta-sub { color:rgba(255,255,255,.72) !important; font-size:10px; line-height:1.55; margin-top:4px; max-width:700px; }
+.ai-cta-badge { position:relative; z-index:2; padding:7px 10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.13); color:#DBEAFE !important; font-size:9px; font-weight:850; flex-shrink:0; }
 
-/* Better Streamlit data tables */
-[data-testid="stDataFrame"] {{ border-radius:15px !important; overflow:hidden !important; border:1px solid {border} !important; box-shadow:0 8px 20px rgba(15,23,42,.035); }}
+/* Chat */
+.chat-shell { max-width:980px; margin:0 auto; padding-bottom:90px; }
+.chat-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:3px 0 15px; border-bottom:1px solid var(--ss-border); }
+.chat-brand { color:var(--ss-text) !important; font-size:24px; font-weight:900; letter-spacing:-.7px; }
+.chat-model { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border-radius:999px; background:var(--ss-surface-2); border:1px solid var(--ss-border); color:var(--ss-muted) !important; font-size:9px; font-weight:800; }
+.chat-welcome { text-align:center; padding:68px 18px 32px; }
+.chat-welcome-icon { width:64px; height:64px; margin:0 auto 14px; border-radius:19px; display:flex; align-items:center; justify-content:center; background:linear-gradient(145deg,var(--ss-primary),var(--ss-primary-hover)); color:#fff !important; font-size:29px; box-shadow:0 13px 28px rgba(37,99,235,.20); }
+.chat-welcome-title { color:var(--ss-text) !important; font-size:28px; font-weight:900; letter-spacing:-.9px; }
+.chat-welcome-sub { color:var(--ss-muted) !important; font-size:11px; line-height:1.65; max-width:610px; margin:7px auto 20px; }
+.prompt-card { background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:15px; padding:13px; text-align:left; min-height:83px; transition:.16s ease; }
+.prompt-card:hover { transform:translateY(-2px); border-color:rgba(37,99,235,.28); box-shadow:0 10px 22px rgba(15,23,42,.05); }
+.prompt-icon { font-size:19px; margin-bottom:6px; }
+.prompt-title { color:var(--ss-text) !important; font-size:11px; font-weight:850; }
+.prompt-sub { color:var(--ss-muted) !important; font-size:9px; margin-top:3px; }
+[data-testid="stChatMessage"] { border-radius:18px; }
+[data-testid="stChatInput"] > div { background:var(--ss-surface) !important; border:1px solid var(--ss-border) !important; box-shadow:0 12px 28px rgba(15,23,42,.08) !important; border-radius:17px !important; }
+[data-testid="stChatInput"] > div:focus-within { border-color:rgba(37,99,235,.45) !important; box-shadow:0 14px 34px rgba(37,99,235,.12), 0 0 0 3px rgba(37,99,235,.06) !important; }
+[data-testid="stChatInput"] textarea { min-height:52px !important; }
 
-@media (max-width:950px) {{
-  .elite-hero {{ grid-template-columns:1fr; padding:25px; }}
-  .elite-orbit {{ min-height:155px; }}
-  .elite-title {{ font-size:31px; }}
-  .elite-progress {{ grid-template-columns:1fr; justify-items:center; text-align:center; }}
-  .elite-ai {{ align-items:flex-start; flex-direction:column; }}
-  .main .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
-}}
+/* Auth */
+.auth-wrap { max-width:1000px; margin:30px auto; }
+.auth-card { background:var(--ss-surface); border:1px solid var(--ss-border); border-radius:25px; overflow:hidden; box-shadow:0 25px 70px rgba(15,23,42,.11); }
+.auth-brand { position:relative; overflow:hidden; padding:30px; background:linear-gradient(135deg,#0F1F3D,#173A73 55%,#2563EB); }
+.auth-brand * { color:#fff !important; }
+.auth-brand:after { content:""; position:absolute; width:300px; height:300px; right:-145px; top:-165px; border-radius:50%; border:1px solid rgba(255,255,255,.09); box-shadow:0 0 0 34px rgba(255,255,255,.018),0 0 0 68px rgba(255,255,255,.01); }
+.auth-logo { width:48px; height:48px; display:flex; align-items:center; justify-content:center; border-radius:15px; background:rgba(255,255,255,.12); font-size:24px; margin-bottom:12px; position:relative; z-index:1; }
+.auth-title { font-size:29px; font-weight:900; letter-spacing:-.8px; position:relative; z-index:1; }
+.auth-sub { color:rgba(255,255,255,.72) !important; font-size:11px; line-height:1.6; margin-top:5px; max-width:650px; position:relative; z-index:1; }
+.auth-note { background:var(--ss-surface-2); border:1px solid var(--ss-border); border-radius:13px; padding:11px 13px; color:var(--ss-muted) !important; font-size:10px; margin-top:13px; }
 
+/* Alerts */
+[data-testid="stAlert"] { border-radius:12px !important; }
+
+/* Motion */
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+@media (max-width:950px) {
+  .main .block-container { padding:1rem 1rem 3rem; }
+  .dashboard-hero { grid-template-columns:1fr; }
+  .dashboard-kpis { grid-template-columns:repeat(2,1fr); }
+  .dashboard-grid-2 { grid-template-columns:1fr; }
+  .progress-layout { grid-template-columns:1fr; justify-items:center; text-align:center; }
+  .ai-cta { align-items:flex-start; flex-direction:column; }
+}
+@media (max-width:580px) {
+  .dashboard-kpis { grid-template-columns:1fr; }
+  .dashboard-hero-title { font-size:31px; }
+  .hero-side { min-height:130px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; }
+}
 
 /* ============================================================
-   ADAPTIVE SIGNATURE PALETTE
-   Indigo + cyan palette tuned for strong contrast in both
-   Light Mode and Dark Mode.
+   FINAL VISUAL DIRECTION — LUXURY ACADEMIC SaaS
    ============================================================ */
-:root {{
-  --ss-primary: #4F46E5;
-  --ss-primary-hover: #3730A3;
-  --ss-primary-soft: rgba(99,102,241,.16);
-  --ss-highlight: #22D3EE;
-  --ss-highlight-strong: #67E8F9;
-  --ss-dark-hero-1: #312E81;
-  --ss-dark-hero-2: #4338CA;
-  --ss-dark-hero-3: #111827;
-}}
-
-/* Brand and interactive accents */
-.logo,
-.chat-welcome-icon,
-.avatar,
-.orbit-core,
-.elite-orbit-core {{
-  background: linear-gradient(135deg, var(--ss-primary), var(--ss-primary-hover)) !important;
-}}
-
-.logo,
-.chat-welcome-icon,
-.avatar,
-.orbit-core,
-.elite-orbit-core {{
-  box-shadow: 0 14px 30px rgba(79,70,229,.22) !important;
-}}
-
-/* Main buttons: high-contrast white text in both themes */
-div.stButton > button {{
-  background: var(--ss-primary) !important;
-  border-color: var(--ss-primary-hover) !important;
-  color: #FFFFFF !important;
-  box-shadow: 0 8px 20px rgba(79,70,229,.16) !important;
-}}
-div.stButton > button:hover {{
-  background: var(--ss-primary-hover) !important;
-  border-color: var(--ss-primary-hover) !important;
-}}
-div.stButton > button p,
-div.stButton > button span {{
-  color: #FFFFFF !important;
-}}
-
-/* Accent states */
-.stat-card:hover,
-.quick-card:hover,
-.prompt-card:hover {{
-  border-color: rgba(99,102,241,.55) !important;
-}}
-.section-kicker,
-.elite-kicker,
-.focus-badge,
-.elite-focus-badge {{
-  color: var(--ss-primary) !important;
-}}
-
-.stat-icon {{
-  background: var(--ss-primary-soft) !important;
-  box-shadow: inset 0 0 0 1px rgba(99,102,241,.12) !important;
-}}
-
-.progress-bar,
-.elite-mini-fill {{
-  background: linear-gradient(90deg, var(--ss-primary), var(--ss-highlight)) !important;
-}}
-
-.progress-ring,
-.elite-ring {{
-  background: conic-gradient(var(--ss-primary) calc(var(--progress) * 1%), #24324A 0) !important;
-}}
-
-/* Signature hero treatment */
-.hero,
-.dashboard-hero,
-.dashboard-ai-banner,
-.elite-ai,
-.auth-brand {{
+.stApp {
+  background:var(--ss-bg) !important;
+}
+[data-testid="stAppViewContainer"] {
   background:
-    radial-gradient(circle at 86% 15%, rgba(34,211,238,.18), transparent 25%),
-    radial-gradient(circle at 8% 88%, rgba(129,140,248,.18), transparent 28%),
-    linear-gradient(135deg, var(--ss-dark-hero-1), var(--ss-dark-hero-2) 52%, var(--ss-dark-hero-3)) !important;
-}}
+    radial-gradient(circle at 8% 0%, rgba(124,58,237,.045), transparent 20%),
+    radial-gradient(circle at 95% 12%, rgba(249,115,22,.035), transparent 18%),
+    var(--ss-bg) !important;
+}
 
-.hero-kicker,
-.dashboard-hero-kicker,
-.elite-kicker {{
-  color: #C7D2FE !important;
-}}
+/* Primary controls */
+div.stButton > button {
+  border-radius:13px !important;
+  min-height:44px !important;
+  background:linear-gradient(135deg,var(--ss-primary),var(--ss-primary-hover)) !important;
+  border:1px solid var(--ss-primary) !important;
+  box-shadow:0 8px 18px rgba(124,58,237,.16) !important;
+  letter-spacing:-.1px;
+}
+div.stButton > button:hover {
+  box-shadow:0 12px 24px rgba(124,58,237,.22) !important;
+  transform:translateY(-2px) !important;
+}
 
-.hero-pill,
-.dashboard-pill,
-.dashboard-ai-badge,
-.elite-ai-badge,
-.chat-model {{
-  border-color: rgba(165,180,252,.20) !important;
-}}
+/* Inputs */
+input, textarea,
+div[data-baseweb="select"] > div {
+  border:1px solid var(--ss-border) !important;
+  box-shadow:0 2px 8px rgba(30,20,45,.025) !important;
+}
+input:focus, textarea:focus {
+  border-color:var(--ss-primary) !important;
+  box-shadow:0 0 0 3px var(--ss-primary-soft) !important;
+}
 
-.hero-title span,
-.elite-title span {{
-  color: #67E8F9 !important;
-}}
+/* Dashboard hero */
+.elite-hero {
+  background:
+    radial-gradient(circle at 82% 18%, rgba(251,146,60,.24), transparent 21%),
+    radial-gradient(circle at 62% 88%, rgba(167,139,250,.17), transparent 27%),
+    linear-gradient(135deg,#24103F 0%,#5B21B6 48%,#21152C 100%) !important;
+  box-shadow:0 26px 58px rgba(76,29,149,.20) !important;
+}
+.elite-kicker { color:#F5D0FE !important; }
+.elite-sub { color:rgba(255,255,255,.78) !important; }
+.elite-pill {
+  background:rgba(255,255,255,.075) !important;
+  border-color:rgba(255,255,255,.14) !important;
+}
+.elite-orbit-core {
+  background:linear-gradient(145deg,#FB923C,#7C3AED) !important;
+  box-shadow:0 18px 36px rgba(0,0,0,.22) !important;
+}
+.elite-orbit-ring.small { border-color:rgba(251,146,60,.25) !important; }
 
-.ai-badge,
-.chat-model {{
-  color: #A5F3FC !important;
-}}
+/* KPI system */
+.elite-kpi {
+  background:linear-gradient(180deg,var(--ss-surface),var(--ss-surface-2)) !important;
+  border-color:var(--ss-border) !important;
+  box-shadow:0 14px 30px rgba(38,25,55,.045) !important;
+}
+.elite-kpi:hover {
+  border-color:rgba(124,58,237,.30) !important;
+}
+.elite-kpi-icon {
+  background:linear-gradient(145deg,rgba(124,58,237,.10),rgba(249,115,22,.08)) !important;
+}
 
-.ai-badge,
-.prompt-card:hover,
-.chat-history-button:hover {{
-  border-color: rgba(34,211,238,.28) !important;
-}}
+/* Quick action cards */
+.elite-action-shell {
+  background:linear-gradient(180deg,var(--ss-surface),var(--ss-surface-2)) !important;
+  border-color:var(--ss-border) !important;
+}
+.elite-action-shell div.stButton > button {
+  background:transparent !important;
+  border-color:transparent !important;
+  box-shadow:none !important;
+  color:var(--ss-text) !important;
+}
+.elite-action-shell div.stButton > button:hover {
+  background:var(--ss-primary-soft) !important;
+  border-color:rgba(124,58,237,.18) !important;
+}
+.elite-action-shell div.stButton > button p,
+.elite-action-shell div.stButton > button span {
+  color:var(--ss-text) !important;
+}
 
-/* Soft ambient highlights */
-.stat-card:first-child .stat-icon {{
-  animation: softPulse 2.8s infinite;
-}}
+/* Panels */
+.elite-panel, .dashboard-progress, .dashboard-focus, .page-banner, .panel {
+  border-color:var(--ss-border) !important;
+  box-shadow:0 14px 34px rgba(38,25,55,.045) !important;
+}
+.elite-panel:hover, .panel:hover {
+  box-shadow:0 20px 42px rgba(38,25,55,.065) !important;
+}
 
-/* Better dark-mode surfaces */
-body {{
-  background: var(--ss-bg, #F4F7FB);
-}}
+/* Progress */
+.elite-ring { background:conic-gradient(#7C3AED calc(var(--progress) * 1%), var(--ss-border) 0) !important; }
+.elite-mini-fill { background:linear-gradient(90deg,#7C3AED,#FB923C) !important; }
 
-[data-testid="stSidebar"] {{
-  backdrop-filter: blur(14px);
-}}
+/* AI banner */
+.elite-ai {
+  background:linear-gradient(135deg,#3B176F 0%,#6D28D9 52%,#8A3B12 100%) !important;
+  border-color:rgba(251,146,60,.20) !important;
+  box-shadow:0 20px 42px rgba(76,29,149,.18) !important;
+}
+.elite-ai-badge { color:#FED7AA !important; }
 
-/* Tables, chat bubbles and controls use the same visual language */
-[data-testid="stDataFrame"],
-[data-testid="stMetric"],
-.chat-welcome,
-.prompt-card,
-.dashboard-focus,
-.dashboard-progress {{
-  border-color: #D9E2F0 !important;
-}}
+/* Tables */
+[data-testid="stDataFrame"] {
+  border-color:var(--ss-border) !important;
+  border-radius:15px !important;
+}
 
-@media (prefers-reduced-motion: reduce) {{
-  .block-container,
-  .hero::after,
-  .stat-card:first-child .stat-icon,
-  .orbit-core,
-  .elite-orbit-core {{
-    animation: none !important;
-  }}
-}}
+/* Sidebar active state */
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
+  background:var(--ss-primary-soft) !important;
+  box-shadow:inset 3px 0 0 var(--ss-primary);
+}
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span {
+  color:var(--ss-primary) !important;
+}
+
+/* Success / warning messages */
+[data-testid="stAlert"] { border-radius:13px !important; }
+
+/* Better dark-mode visibility for built-in elements */
+[data-baseweb="popover"] *, [role="option"] * { color:var(--ss-text) !important; }
 
 </style>
-""",
+""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#7C3AED" if not dark_mode else "#A78BFA").replace("__PRIMARY_HOVER__", "#6D28D9" if not dark_mode else "#8B5CF6").replace("__PRIMARY_SOFT__", "rgba(124,58,237,.10)" if not dark_mode else "rgba(167,139,250,.14)").replace("__ACCENT__", "#F97316" if not dark_mode else "#FB923C").replace("__ACCENT_SOFT__", "rgba(249,115,22,.12)" if not dark_mode else "rgba(251,146,60,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
     unsafe_allow_html=True,
 )
+
 
 # ============================================================
 # LOCAL AUTHENTICATION HELPERS
@@ -1762,50 +1329,62 @@ pending_task_count = cursor.fetchone()[0]
 
 
 if st.session_state.page == 1:
-    st.markdown('<div class="elite-page">', unsafe_allow_html=True)
-    first_name = DISPLAY_NAME.split()[0] if DISPLAY_NAME.strip() else "Student"
-    today_text = str(date.today())
+    today_display = date.today().strftime("%A, %d %B")
+    first_name = DISPLAY_NAME.split()[0] if DISPLAY_NAME else "Student"
+
     upcoming_assignments = cursor.execute(
-        "SELECT title, deadline, priority, status FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 6",
+        "SELECT title, deadline, priority, status FROM assignments WHERE user_id = ? ORDER BY deadline LIMIT 5",
         (AUTH_ID,),
     ).fetchall()
     upcoming_exams = cursor.execute(
-        "SELECT title, exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exams.exam_date >= ? ORDER BY exams.exam_date LIMIT 6",
-        (AUTH_ID, today_text),
+        "SELECT exams.title, exams.exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exams.exam_date >= ? ORDER BY exams.exam_date LIMIT 5",
+        (AUTH_ID, str(date.today())),
     ).fetchall()
     focus_tasks = cursor.execute(
         "SELECT tasks.title, tasks.task_date, tasks.duration, tasks.priority, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id WHERE tasks.user_id = ? AND tasks.completed = 0 ORDER BY CASE tasks.priority WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, tasks.task_date LIMIT 5",
         (AUTH_ID,),
     ).fetchall()
     completed_tasks = cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1", (AUTH_ID,)).fetchone()[0]
-    total_tasks = cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (AUTH_ID,)).fetchone()[0]
+    total_tasks = completed_tasks + pending_task_count
     task_progress = int((completed_tasks / total_tasks) * 100) if total_tasks else 0
 
+    st.markdown('<div class="dashboard-shell">', unsafe_allow_html=True)
     st.markdown(
-        f'''<div class="elite-hero">
-  <div class="elite-copy">
-    <div class="elite-kicker">Personal academic command center</div>
-    <div class="elite-title">Good morning, <span>{first_name}</span> 👋</div>
-    <div class="elite-sub">A calm, focused workspace for your subjects, deadlines, exams and daily study goals. Everything important is visible without the clutter.</div>
-    <div class="elite-pills"><span class="elite-pill">✦ {today_text}</span><span class="elite-pill">🎓 Student workspace</span><span class="elite-pill">⚡ {pending_task_count} open tasks</span></div>
+        f'''<div class="dashboard-hero">
+  <div class="dashboard-hero-copy">
+    <div class="dashboard-hero-kicker">Student workspace • {today_display}</div>
+    <div class="dashboard-hero-title">Good morning, {first_name}. <span class="accent">Let’s make progress.</span></div>
+    <div class="dashboard-hero-sub">Your study space is ready. Stay on top of deadlines, keep your study tasks moving, and use your academic data to decide what deserves attention next.</div>
+    <div class="dashboard-hero-meta">
+      <span class="dashboard-pill">📚 {subject_count} subjects</span>
+      <span class="dashboard-pill">📝 {assignment_count} assignments</span>
+      <span class="dashboard-pill">🎯 {exam_count} upcoming exams</span>
+      <span class="dashboard-pill">⚡ {pending_task_count} open tasks</span>
+    </div>
   </div>
-  <div class="elite-orbit" aria-hidden="true"><div class="elite-orbit-ring"></div><div class="elite-orbit-ring small"></div><div class="elite-orbit-core">🎓</div><span class="elite-orbit-dot one"></span><span class="elite-orbit-dot two"></span></div>
-</div>''', unsafe_allow_html=True)
+  <div class="hero-side">
+    <div class="hero-side-label">Task completion</div>
+    <div class="hero-side-number">{task_progress}%</div>
+    <div class="hero-side-caption">{completed_tasks} completed of {total_tasks} study tasks in your account.</div>
+    <div class="hero-side-bar"><div class="hero-side-fill" style="width:{task_progress}%;"></div></div>
+  </div>
+</div>''',
+        unsafe_allow_html=True,
+    )
 
-    st.markdown('<div class="elite-kpi-grid">', unsafe_allow_html=True)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">📚</div></div><div class="elite-kpi-label">YOUR SUBJECTS</div><div class="elite-kpi-value">{subject_count}</div><div class="elite-kpi-foot">Courses currently organized</div></div>', unsafe_allow_html=True)
-    k2.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">📝</div></div><div class="elite-kpi-label">ASSIGNMENTS</div><div class="elite-kpi-value">{assignment_count}</div><div class="elite-kpi-foot">Deadlines in your workspace</div></div>', unsafe_allow_html=True)
-    k3.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">🎯</div></div><div class="elite-kpi-label">UPCOMING EXAMS</div><div class="elite-kpi-value">{exam_count}</div><div class="elite-kpi-foot">Future exam dates</div></div>', unsafe_allow_html=True)
-    k4.markdown(f'<div class="elite-kpi"><div class="elite-kpi-top"><div class="elite-kpi-icon">✓</div></div><div class="elite-kpi-label">PENDING TASKS</div><div class="elite-kpi-value">{pending_task_count}</div><div class="elite-kpi-foot">Study actions still open</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-kpis">', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><div class="kpi-icon">📚</div><div class="kpi-label">Subjects</div><div class="kpi-value">{subject_count}</div><div class="kpi-foot">Courses organized</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><div class="kpi-icon">📝</div><div class="kpi-label">Assignments</div><div class="kpi-value">{assignment_count}</div><div class="kpi-foot">Deadlines tracked</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><div class="kpi-icon">🎯</div><div class="kpi-label">Upcoming exams</div><div class="kpi-value">{exam_count}</div><div class="kpi-foot">Future exam dates</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi"><div class="kpi-icon">✓</div><div class="kpi-label">Open tasks</div><div class="kpi-value">{pending_task_count}</div><div class="kpi-foot">Study actions pending</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Quick actions</div><div class="elite-section-sub">Your most-used StudySphere destinations, one click away.</div></div></div><div class="elite-action-shell">', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Quick actions</div><div class="section-sub">Jump directly into the part of StudySphere you need.</div></div></div><div class="dashboard-actions">', unsafe_allow_html=True)
     a1, a2, a3, a4 = st.columns(4)
-    go_ai = a1.button("🤖  Ask AI Tutor\nGet help with difficult topics", key="elite_dash_ai", use_container_width=True)
-    go_subjects = a2.button("📚  Manage Subjects\nOrganize your courses", key="elite_dash_subjects", use_container_width=True)
-    go_exams = a3.button("🎯  Exam Focus\nView upcoming exams", key="elite_dash_exams", use_container_width=True)
-    go_planner = a4.button("⚡  Study Planner\nBuild today's focus", key="elite_dash_planner", use_container_width=True)
+    go_ai = a1.button("🤖  Ask AI Tutor\nGet help with difficult topics", key="dashboard_ai", use_container_width=True)
+    go_subjects = a2.button("📚  Manage Subjects\nOrganize your courses", key="dashboard_subjects", use_container_width=True)
+    go_exams = a3.button("🎯  Exam Focus\nReview upcoming exams", key="dashboard_exams", use_container_width=True)
+    go_planner = a4.button("⚡  Study Planner\nBuild today’s focus", key="dashboard_planner", use_container_width=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     if go_ai:
@@ -1821,43 +1400,56 @@ if st.session_state.page == 1:
         st.session_state.page = 5
         st.rerun()
 
-    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Today at a glance</div><div class="elite-section-sub">See what needs your attention and how far you have progressed.</div></div></div>', unsafe_allow_html=True)
-    focus_col, progress_col = st.columns([1.55, 1])
-    with focus_col:
-        st.markdown('<div class="elite-panel"><div class="elite-panel-title">🔥 Priority queue</div><div class="elite-panel-sub">Unfinished tasks are ordered by priority first.</div>', unsafe_allow_html=True)
-        if focus_tasks:
-            for task_title_value, task_day, task_minutes, task_priority_value, task_subject_value in focus_tasks:
-                st.markdown(f'<div class="elite-focus-row"><div class="elite-focus-icon">📖</div><div class="elite-focus-main"><div class="elite-focus-name">{task_title_value}</div><div class="elite-focus-detail">{task_subject_value or "General"} • {task_day} • {task_minutes} min</div></div><div class="elite-focus-badge">{task_priority_value or "Medium"}</div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">🎉 You are all caught up. Add a study task whenever you are ready.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with progress_col:
-        st.markdown('<div class="elite-panel"><div class="elite-panel-title">📈 Study progress</div><div class="elite-panel-sub">Your current task completion pace.</div><div style="height:14px"></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="elite-progress"><div class="elite-ring" style="--progress:{task_progress};"><div class="elite-ring-text">{task_progress}%</div></div><div class="elite-progress-copy"><h4>{completed_tasks} of {total_tasks} tasks complete</h4><p>Small, consistent progress compounds. Finish your next task and keep your momentum going.</p><div class="elite-mini-bar"><div class="elite-mini-fill" style="width:{task_progress}%;"></div></div></div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Today at a glance</div><div class="section-sub">A focused view of the work that matters most right now.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
+    focus_html = '<div class="focus-card"><div class="panel-title">🔥 Priority queue</div><div class="panel-sub">Unfinished study tasks sorted by priority.</div>'
+    if focus_tasks:
+        for task_title_value, task_day, task_minutes, task_priority_value, task_subject_value in focus_tasks:
+            focus_html += f'<div class="focus-row"><div class="focus-icon">📖</div><div class="focus-main"><div class="focus-name">{task_title_value}</div><div class="focus-detail">{task_subject_value or "General"} • {task_day} • {task_minutes} min</div></div><div class="focus-badge">{task_priority_value or "Medium"}</div></div>'
+    else:
+        focus_html += '<div class="dashboard-empty" style="margin-top:14px;">🎉 You are all caught up. Add a study task whenever you are ready.</div>'
+    focus_html += '</div>'
+    st.markdown(focus_html, unsafe_allow_html=True)
 
-    st.markdown('<div class="elite-section"><div class="elite-section-head"><div><div class="elite-section-title">Deadlines & exam radar</div><div class="elite-section-sub">The next academic items saved to your account.</div></div></div>', unsafe_allow_html=True)
-    d1, d2 = st.columns(2)
-    with d1:
-        st.markdown('<div class="elite-panel"><div class="elite-panel-title">📝 Upcoming assignments</div><div class="elite-panel-sub">Your nearest assignment deadlines.</div>', unsafe_allow_html=True)
-        if upcoming_assignments:
-            st.dataframe(upcoming_assignments, use_container_width=True, hide_index=True, column_config={"title":"Assignment","deadline":"Deadline","priority":"Priority","status":"Status"})
-        else:
-            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">No assignments yet. Add your first one to start tracking deadlines.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with d2:
-        st.markdown('<div class="elite-panel"><div class="elite-panel-title">🎯 Upcoming exams</div><div class="elite-panel-sub">Your next exam dates and subjects.</div>', unsafe_allow_html=True)
-        if upcoming_exams:
-            exam_rows = [(row[0], row[1], row[2] or "General") for row in upcoming_exams]
-            st.dataframe(exam_rows, use_container_width=True, hide_index=True, column_config={"title":"Exam","exam_date":"Exam Date","name":"Subject"})
-        else:
-            st.markdown('<div class="dashboard-empty" style="margin-top:14px;">No upcoming exams have been added yet.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="progress-card"><div class="panel-title">📈 Study progress</div><div class="panel-sub">Your current task completion pace.</div><div style="height:15px"></div><div class="progress-layout"><div class="progress-ring" style="--progress:{task_progress};"><div class="progress-ring-text">{task_progress}%</div></div><div><div class="progress-heading">{completed_tasks} of {total_tasks} tasks complete</div><div class="progress-copy">Keep your next study action small and clear. Every completed session moves your academic workspace forward.</div><div class="mini-bar"><div class="mini-fill" style="width:{task_progress}%;"></div></div></div></div></div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="elite-ai"><div class="elite-ai-copy"><div class="elite-ai-title">🤖 Your StudySphere AI is ready</div><div class="elite-ai-sub">Ask questions, analyze your workload, or build a focused plan using the academic data already inside your account.</div></div><div class="elite-ai-badge">Connected • Gemini</div></div>', unsafe_allow_html=True)
-    open_ai = st.button("Open AI Agent", key="elite_dash_open_ai", use_container_width=True)
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Deadline radar</div><div class="section-sub">Your nearest saved assignments and exams.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
+
+    assignment_html = '<div class="radar-card"><div class="panel-title">📝 Upcoming assignments</div><div class="panel-sub">Sorted by deadline.</div><div class="radar-list">'
+    if upcoming_assignments:
+        for title_value, deadline_value, priority_value, status_value in upcoming_assignments:
+            try:
+                dt_value = datetime.strptime(str(deadline_value), "%Y-%m-%d").date()
+                day_value = dt_value.strftime("%d")
+                month_value = dt_value.strftime("%b")
+            except Exception:
+                day_value = "—"
+                month_value = "—"
+            assignment_html += f'<div class="radar-item"><div class="radar-date"><div class="radar-day">{day_value}</div><div class="radar-month">{month_value}</div></div><div class="radar-main"><div class="radar-name">{title_value}</div><div class="radar-meta">{priority_value} priority • {status_value}</div></div></div>'
+    else:
+        assignment_html += '<div class="dashboard-empty">No assignments yet. Add your first assignment to start tracking deadlines.</div>'
+    assignment_html += '</div></div>'
+    st.markdown(assignment_html, unsafe_allow_html=True)
+
+    exam_html = '<div class="radar-card"><div class="panel-title">🎯 Upcoming exams</div><div class="panel-sub">Your nearest exam dates.</div><div class="radar-list">'
+    if upcoming_exams:
+        for exam_title_value, exam_date_value, exam_subject_value in upcoming_exams:
+            try:
+                dt_value = datetime.strptime(str(exam_date_value), "%Y-%m-%d").date()
+                day_value = dt_value.strftime("%d")
+                month_value = dt_value.strftime("%b")
+            except Exception:
+                day_value = "—"
+                month_value = "—"
+            exam_html += f'<div class="radar-item"><div class="radar-date"><div class="radar-day">{day_value}</div><div class="radar-month">{month_value}</div></div><div class="radar-main"><div class="radar-name">{exam_title_value}</div><div class="radar-meta">{exam_subject_value or "General"} • Exam date</div></div></div>'
+    else:
+        exam_html += '<div class="dashboard-empty">No upcoming exams have been added yet.</div>'
+    exam_html += '</div></div>'
+    st.markdown(exam_html, unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="ai-cta"><div class="ai-cta-copy"><div class="ai-cta-title">🤖 StudySphere AI is ready</div><div class="ai-cta-sub">Ask questions naturally, understand difficult topics, review your workload, or turn your stored academic data into a focused plan.</div></div><div class="ai-cta-badge">Gemini powered</div></div>', unsafe_allow_html=True)
+    open_ai = st.button("Open AI Agent", key="dashboard_open_ai", use_container_width=True)
     if open_ai:
         st.session_state.page = 7
         st.rerun()
@@ -1918,6 +1510,27 @@ elif st.session_state.page == 3:
     assignment_list = cursor.execute("SELECT assignments.id, assignments.title, assignments.description, assignments.deadline, assignments.priority, assignments.status, subjects.name FROM assignments LEFT JOIN subjects ON assignments.subject_id = subjects.id WHERE assignments.user_id = ? ORDER BY assignments.deadline", (AUTH_ID,)).fetchall()
     st.markdown('<div class="panel"><div class="panel-title">Assignment List</div><div class="panel-sub">Your saved assignments and their current status.</div></div>', unsafe_allow_html=True)
     st.dataframe(assignment_list, use_container_width=True, hide_index=True, column_config={"id":"ID","title":"Assignment","description":"Description","deadline":"Deadline","priority":"Priority","status":"Status","name":"Subject"})
+
+    # Assignment status can be changed at any time after creation.
+    if assignment_list:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">✏️ Update assignment status</div><div class="panel-sub">When you finish an assignment, choose it below and change its status.</div></div>', unsafe_allow_html=True)
+        assignment_choice_map = {f"#{row[0]} • {row[1]}": row for row in assignment_list}
+        selected_assignment_label = st.selectbox("Assignment", list(assignment_choice_map.keys()), key="assignment_status_choice")
+        selected_assignment = assignment_choice_map[selected_assignment_label]
+        status_values = ["Pending", "In Progress", "Completed"]
+        current_status = selected_assignment[5] if selected_assignment[5] in status_values else "Pending"
+        new_assignment_status = st.selectbox("New Status", status_values, index=status_values.index(current_status), key="assignment_status_value")
+        update_assignment_status = st.button("✅ Update status", key="update_assignment_status", use_container_width=True)
+        if update_assignment_status:
+            cursor.execute(
+                "UPDATE assignments SET status = ? WHERE id = ? AND user_id = ?",
+                (new_assignment_status, selected_assignment[0], AUTH_ID),
+            )
+            conn.commit()
+            st.success(f"Assignment status changed to {new_assignment_status}.")
+            st.rerun()
+    else:
+        st.markdown('<div class="dashboard-empty" style="margin-top:18px;">Once you add an assignment, you can change its status here at any time.</div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 4:
     st.markdown('<div class="page-banner"><div class="page-title">📅 Exams</div><div class="page-sub">Keep your exam dates, syllabus and notes organized.</div></div>', unsafe_allow_html=True)
