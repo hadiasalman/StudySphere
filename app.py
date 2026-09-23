@@ -1495,10 +1495,149 @@ def stream_gemini_interaction(api_key, chat_id, user_id, chat_messages, academic
     yield "The AI service is currently unavailable. Please try again later."
 
 
+
+def authorized_institution_courses(user_id):
+    """Return institution courses this user is authorized to use in the AI context."""
+    role_row = cursor.execute("SELECT role, institution_id FROM users WHERE auth_id = ?", (str(user_id),)).fetchone()
+    role = str((role_row[0] if role_row else "student") or "student").lower()
+    institution_id = str((role_row[1] if role_row and role_row[1] else DEFAULT_INSTITUTION_ID))
+
+    base_sql = (
+        "SELECT c.id, c.name, c.code, d.name, c.semester, c.credits, c.description "
+        "FROM institution_courses c LEFT JOIN departments d ON c.department_id = d.id "
+    )
+
+    if role in {"creator", "university_admin"}:
+        return cursor.execute(
+            base_sql + "WHERE c.institution_id = ? AND c.active = 1 ORDER BY c.name",
+            (institution_id,),
+        ).fetchall()
+
+    if role == "faculty":
+        return cursor.execute(
+            base_sql + "JOIN course_faculty cf ON cf.course_id = c.id WHERE c.institution_id = ? AND c.active = 1 AND cf.user_id = ? ORDER BY c.name",
+            (institution_id, str(user_id)),
+        ).fetchall()
+
+    return cursor.execute(
+        base_sql + "JOIN course_enrollments ce ON ce.course_id = c.id WHERE c.institution_id = ? AND c.active = 1 AND ce.user_id = ? ORDER BY c.name",
+        (institution_id, str(user_id)),
+    ).fetchall()
+
+
+def retrieve_relevant_course_chunks(user_id, query, top_k=8):
+    """Retrieve snippets only from institution courses the current user can access."""
+    course_rows = authorized_institution_courses(user_id)
+    if not course_rows:
+        return []
+
+    query_terms = Counter(tokenize_for_rag(query))
+    if not query_terms:
+        return []
+
+    course_ids = [str(row[0]) for row in course_rows]
+    placeholders = ",".join("?" for _ in course_ids)
+    material_rows = cursor.execute(
+        f"SELECT cm.id, cm.course_id, cm.name, cm.file_type, cm.content_text "
+        f"FROM course_materials cm WHERE cm.course_id IN ({placeholders}) ORDER BY cm.uploaded_at DESC",
+        course_ids,
+    ).fetchall()
+
+    course_map = {str(row[0]): row for row in course_rows}
+    candidates = []
+
+    # Course metadata is also valid institutional knowledge for an authorized user.
+    for course_id, name, code, department_name, semester, credits, description in course_rows:
+        metadata = "\n".join([
+            f"Course: {name or '—'}",
+            f"Code: {code or '—'}",
+            f"Department: {department_name or '—'}",
+            f"Semester: {semester or '—'}",
+            f"Credits: {credits or '—'}",
+            f"Description: {description or '—'}",
+        ]).strip()
+        tokens = tokenize_for_rag(metadata)
+        frequencies = Counter(tokens)
+        matched = sum(1 for term in query_terms if frequencies.get(term, 0))
+        score = 0.0
+        for term, qtf in query_terms.items():
+            if frequencies.get(term, 0):
+                score += min(frequencies[term], 3) * qtf * 1.5
+        course_label = f"{name or ''} {code or ''}".lower()
+        normalized_query = " ".join(str(query or "").lower().split())
+        if normalized_query and normalized_query in course_label and len(normalized_query) >= 3:
+            score += 10.0
+        if matched:
+            candidates.append((score, f"course-meta-{course_id}", 0, metadata, f"University course: {name or course_id}", "course"))
+
+    # Material is chunked at retrieval time, preserving the existing DB and avoiding another migration.
+    for material_id, course_id, material_name, file_type, content_text in material_rows:
+        course_row = course_map.get(str(course_id))
+        course_name_value = course_row[1] if course_row else course_id
+        for chunk_index, chunk in enumerate(chunk_document_text(content_text, chunk_words=220, overlap_words=45)):
+            tokens = tokenize_for_rag(chunk)
+            if not tokens:
+                continue
+            frequencies = Counter(tokens)
+            matched = 0
+            score = 0.0
+            for term, qtf in query_terms.items():
+                tf = frequencies.get(term, 0)
+                if tf:
+                    matched += 1
+                    score += min(tf, 4) * qtf
+            label_terms = tokenize_for_rag(f"{course_name_value} {material_name}")
+            score += sum(1.5 for term in query_terms if term in label_terms)
+            if matched:
+                candidates.append(
+                    (
+                        score,
+                        f"course-material-{material_id}",
+                        chunk_index,
+                        chunk,
+                        f"{course_name_value} • {material_name}",
+                        file_type or "material",
+                    )
+                )
+
+    candidates.sort(key=lambda item: (-item[0], item[4], item[2]))
+    return candidates[:int(top_k)]
+
+
+def university_course_context_for_user(user_id):
+    courses = authorized_institution_courses(user_id)
+    if not courses:
+        return {"authorized_university_courses": []}
+
+    course_items = []
+    for course_id, name, code, department_name, semester, credits, description in courses:
+        assignment_rows = cursor.execute(
+            "SELECT title, due_date, description FROM course_assignments WHERE course_id = ? ORDER BY due_date LIMIT 12",
+            (course_id,),
+        ).fetchall()
+        material_rows = cursor.execute(
+            "SELECT name, file_type, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC LIMIT 20",
+            (course_id,),
+        ).fetchall()
+        course_items.append({
+            "course_id": str(course_id),
+            "name": name,
+            "code": code or "",
+            "department": department_name or "",
+            "semester": semester or "",
+            "credits": credits,
+            "description": description or "",
+            "course_assignments": assignment_rows,
+            "course_materials": material_rows,
+        })
+    return {"authorized_university_courses": course_items}
+
 def academic_context_for_chat(auth_id, rag_context=""):
-    base_context = format_agent_context(build_agent_context(auth_id))
+    context = build_agent_context(auth_id)
+    context.update(university_course_context_for_user(auth_id))
+    base_context = format_agent_context(context)
     if rag_context:
-        return base_context + "\n\nRelevant retrieved knowledge from the student's uploaded documents:\n" + rag_context
+        return base_context + "\n\nRelevant authorized knowledge retrieved for this user (personal documents and/or authorized university course material):\n" + rag_context
     return base_context
 
 
@@ -1579,6 +1718,7 @@ def ai_request_relevance(auth_id, prompt_text, rag_chunks=None, recent_chat_rows
     exam_count = int(cursor.execute("SELECT COUNT(*) FROM exams WHERE user_id = ?", (auth_id,)).fetchone()[0] or 0)
     task_count = int(cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (auth_id,)).fetchone()[0] or 0)
     document_count = int(cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (auth_id,)).fetchone()[0] or 0)
+    authorized_course_count = len(authorized_institution_courses(auth_id))
 
     doc_intent = any(term in prompt_lower for term in [
         "my notes", "my documents", "uploaded notes", "uploaded documents",
@@ -1605,8 +1745,8 @@ def ai_request_relevance(auth_id, prompt_text, rag_chunks=None, recent_chat_rows
         "profile": has_profile_data,
         "note": document_count > 0, "notes": document_count > 0,
         "document": document_count > 0, "documents": document_count > 0,
-        "course": subject_count > 0, "courses": subject_count > 0,
-        "deadline": bool(assignment_count or exam_count), "deadlines": bool(assignment_count or exam_count),
+        "course": bool(subject_count or authorized_course_count), "courses": bool(subject_count or authorized_course_count),
+        "deadline": bool(assignment_count or exam_count or authorized_course_count), "deadlines": bool(assignment_count or exam_count or authorized_course_count),
         "quiz": bool(subject_count or document_count), "quizzes": bool(subject_count or document_count),
         "presentation": bool(subject_count or document_count),
     }
@@ -1685,6 +1825,7 @@ def build_agent_context(auth_id):
         "SELECT name, file_type, uploaded_at, char_count, chunk_count FROM documents WHERE user_id = ? ORDER BY uploaded_at DESC LIMIT 30",
         (auth_id,),
     ).fetchall()
+    university_course_context = university_course_context_for_user(auth_id) if "university_course_context_for_user" in globals() else {"authorized_university_courses": []}
     return {
         "today": str(date.today()),
         "profile": profile or (),
@@ -1693,6 +1834,7 @@ def build_agent_context(auth_id):
         "upcoming_exams": exams,
         "study_tasks": tasks,
         "uploaded_documents": documents,
+        "authorized_university_courses": university_course_context.get("authorized_university_courses", []),
     }
 
 
@@ -2049,6 +2191,8 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
             "lecture notes", "the notes i uploaded", "the document i uploaded",
         ]):
             relevant_chunks = retrieve_fallback_document_chunks(auth_id, top_k=12)
+        relevant_course_chunks = retrieve_relevant_course_chunks(auth_id, prompt_text, top_k=12)
+        relevant_chunks = sorted(relevant_chunks + relevant_course_chunks, key=lambda item: (-item[0], item[4], item[2]))[:16]
         rag_context = format_rag_context(relevant_chunks)
     except Exception:
         rag_context = ""
@@ -2647,6 +2791,7 @@ nav_options = [
     (8, "🤖  AI Agent"),
     (9, "📊  Presentation Studio"),
     (10, "🔄  Document Converter"),
+    (14, "🎓  My University"),
 ]
 if st.session_state.is_admin:
     nav_options.append((11, "🔐  Creator Dashboard"))
@@ -2683,6 +2828,9 @@ if st.sidebar.button("📊 Presentation Studio", key="presentation_studio_sideba
     st.rerun()
 if st.sidebar.button("🔄 Document Converter", key="document_converter_sidebar", use_container_width=True):
     st.session_state.page = 10
+    st.rerun()
+if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_container_width=True):
+    st.session_state.page = 14
     st.rerun()
 if st.session_state.is_admin:
     st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
@@ -3177,7 +3325,9 @@ elif st.session_state.page == 8:
             rag_chunks = retrieve_relevant_chunks(AUTH_ID, prompt_text, top_k=6)
             if not rag_chunks and any(term in prompt_text.lower() for term in ["my notes", "my documents", "uploaded notes", "uploaded documents"]):
                 rag_chunks = retrieve_fallback_document_chunks(AUTH_ID, top_k=6)
-            relevant, relevance_reason = ai_request_relevance(AUTH_ID, prompt_text, rag_chunks=rag_chunks, recent_chat_rows=chat_rows)
+            course_chunks = retrieve_relevant_course_chunks(AUTH_ID, prompt_text, top_k=6)
+            all_retrieved_chunks = sorted(rag_chunks + course_chunks, key=lambda item: (-item[0], item[4], item[2]))[:10]
+            relevant, relevance_reason = ai_request_relevance(AUTH_ID, prompt_text, rag_chunks=all_retrieved_chunks, recent_chat_rows=chat_rows)
 
             save_chat_message(active_chat_id, AUTH_ID, "user", prompt_text)
             if not chat_rows:
@@ -3195,8 +3345,8 @@ elif st.session_state.page == 8:
                 st.rerun()
 
             refreshed_rows = load_chat_messages(active_chat_id, AUTH_ID)
-            rag_context = format_rag_context(rag_chunks)
-            st.session_state.last_rag_sources = [item[4] for item in rag_chunks]
+            rag_context = format_rag_context(all_retrieved_chunks)
+            st.session_state.last_rag_sources = [item[4] for item in all_retrieved_chunks]
             academic_context = academic_context_for_chat(AUTH_ID, rag_context)
             with st.chat_message("assistant", avatar="🤖"):
                 streamed_answer = st.write_stream(
@@ -3210,9 +3360,9 @@ elif st.session_state.page == 8:
                     )
                 )
 
-            if rag_chunks:
+            if all_retrieved_chunks:
                 unique_sources = list(dict.fromkeys(st.session_state.last_rag_sources))
-                st.caption("📚 Sources retrieved: " + " • ".join(unique_sources))
+                st.caption("📚 Authorized sources retrieved: " + " • ".join(unique_sources))
 
             answer_text = streamed_answer if isinstance(streamed_answer, str) else str(streamed_answer)
             answer_text = answer_text.strip()
@@ -3334,8 +3484,92 @@ elif st.session_state.page == 9:
             st.session_state.presentation_data = None
             st.rerun()
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">PPT • AI assisted</div><div class="ai-title">From prompt to presentation</div><div class="ai-text">StudySphere can also use relevant passages from your uploaded study documents when building the deck, so the presentation can stay grounded in your own notes when the topic matches your knowledge base.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">PPT • grounded</div><div class="ai-title">From prompt to presentation</div><div class="ai-text">StudySphere uses relevant personal documents and authorized university course material when building the deck. It does not intentionally pull material from courses this account is not allowed to access.</div></div>', unsafe_allow_html=True)
 
+
+elif st.session_state.page == 14:
+    university_role_label = role_label(st.session_state.user_role)
+    authorized_courses = authorized_institution_courses(AUTH_ID)
+    st.markdown('<div class="page-banner"><div class="page-title">🎓 My University</div><div class="page-sub">Courses, authorized course material and course assignments connected to your StudySphere account.</div></div>', unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="ai-panel"><div class="ai-badge">Authorized university knowledge</div><div class="ai-title">🏫 Your {university_role_label} workspace</div><div class="ai-text">StudySphere shows only university courses this account is authorized to access. The AI Agent can use those course records and their stored teaching material when a prompt is relevant.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    uc1, uc2, uc3 = st.columns(3)
+    uc1.metric("Authorized courses", len(authorized_courses))
+    if authorized_courses:
+        course_ids = [str(row[0]) for row in authorized_courses]
+        placeholders = ",".join("?" for _ in course_ids)
+        material_total = int(cursor.execute(f"SELECT COUNT(*) FROM course_materials WHERE course_id IN ({placeholders})", course_ids).fetchone()[0] or 0)
+        assignment_total = int(cursor.execute(f"SELECT COUNT(*) FROM course_assignments WHERE course_id IN ({placeholders})", course_ids).fetchone()[0] or 0)
+    else:
+        material_total = 0
+        assignment_total = 0
+    uc2.metric("Course materials", material_total)
+    uc3.metric("Course assignments", assignment_total)
+
+    if not authorized_courses:
+        st.markdown('<div class="panel"><div class="panel-title">No university courses connected yet</div><div class="panel-sub">A University Admin needs to enroll this student in a course. Once enrolled, the course, assignments and authorized teaching material will appear here and become available to the AI when relevant.</div></div>', unsafe_allow_html=True)
+    else:
+        course_labels = [f"{row[1]}" + (f" ({row[2]})" if row[2] else "") for row in authorized_courses]
+        selected_course_label = st.selectbox("Choose a course", course_labels, key="my_university_course_selector")
+        selected_course = authorized_courses[course_labels.index(selected_course_label)]
+        selected_course_id = str(selected_course[0])
+
+        left_course, right_course = st.columns([1.05, 1.95])
+        with left_course:
+            st.markdown('<div class="panel"><div class="panel-title">📘 Course details</div><div class="panel-sub">Institutional information for your selected course.</div></div>', unsafe_allow_html=True)
+            st.write(f"**Course:** {selected_course[1] or '—'}")
+            st.write(f"**Code:** {selected_course[2] or '—'}")
+            st.write(f"**Department:** {selected_course[3] or '—'}")
+            st.write(f"**Semester:** {selected_course[4] or '—'}")
+            st.write(f"**Credits:** {selected_course[5] or '—'}")
+            st.write(f"**Description:** {selected_course[6] or 'No description provided.'}")
+            if st.button("🤖 Ask AI about this course", key=f"my_university_ai_{selected_course_id}", use_container_width=True):
+                st.session_state.page = 8
+                st.rerun()
+
+        with right_course:
+            st.markdown('<div class="panel"><div class="panel-title">📚 Authorized course material</div><div class="panel-sub">Only material attached to this course is visible here and available to enrolled users through grounded retrieval.</div></div>', unsafe_allow_html=True)
+            materials = cursor.execute("SELECT name, file_type, char_count, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC", (selected_course_id,)).fetchall()
+            if materials:
+                st.dataframe([{"Material": r[0], "Type": (r[1] or "").upper(), "Characters": r[2], "Uploaded": r[3]} for r in materials], use_container_width=True, hide_index=True)
+            else:
+                st.info("No teaching material has been uploaded to this course yet.")
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📝 Course assignments</div><div class="panel-sub">Assignments published by faculty for this course.</div></div>', unsafe_allow_html=True)
+        course_assignment_rows = cursor.execute("SELECT id, title, due_date, description FROM course_assignments WHERE course_id = ? ORDER BY due_date", (selected_course_id,)).fetchall()
+        if course_assignment_rows:
+            selected_assignment_label = st.selectbox(
+                "Course assignment",
+                [f"{r[1]} • {r[2] or 'No due date'}" for r in course_assignment_rows],
+                key=f"my_university_assignment_{selected_course_id}",
+            )
+            selected_assignment = course_assignment_rows[[f"{r[1]} • {r[2] or 'No due date'}" for r in course_assignment_rows].index(selected_assignment_label)]
+            st.write(f"**Description:** {selected_assignment[3] or 'No description provided.'}")
+            import_assignment = st.button("➕ Add this to my personal assignments", key=f"import_course_assignment_{selected_assignment[0]}", use_container_width=True)
+            if import_assignment:
+                duplicate = cursor.execute(
+                    "SELECT id FROM assignments WHERE user_id = ? AND title = ? AND deadline = ?",
+                    (AUTH_ID, selected_assignment[1], selected_assignment[2]),
+                ).fetchone()
+                if duplicate:
+                    st.info("This course assignment is already in your personal assignment list.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO assignments (title, description, deadline, priority, status, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (selected_assignment[1], selected_assignment[3] or "", selected_assignment[2], "Medium", "Pending", None, AUTH_ID),
+                    )
+                    conn.commit()
+                    write_audit_log("course_assignment_imported", AUTH_ID, st.session_state.user_role, AUTH_ID, f"Imported course assignment '{selected_assignment[1]}' from {selected_course[1]}")
+                    st.success("Added to your personal assignments.")
+                    st.rerun()
+        else:
+            st.info("No course-level assignments have been published yet.")
+
+        st.markdown('<div class="ai-panel"><div class="ai-badge">Grounded AI</div><div class="ai-title">🧠 What the AI can use here</div><div class="ai-text">Your AI Agent can use your profile, personal academic records, your uploaded documents, and the courses/material authorized for this account. It will not use an unrelated university course simply because it exists in the database.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">👨‍🏫 Faculty Center</div><div class="page-sub">Manage assigned courses, course material, assignments and enrolled students from one teaching workspace.</div></div>', unsafe_allow_html=True)
