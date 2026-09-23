@@ -453,12 +453,19 @@ cursor.execute("CREATE TABLE IF NOT EXISTS lti_registrations (id TEXT PRIMARY KE
 cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS section_enrollments (section_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'active', enrolled_at TEXT NOT NULL, PRIMARY KEY(section_id, user_id, role))")
 
+# ============================================================
+# INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT (STEP 10)
+# ============================================================
+# Support cases are human-review records. They are not automated diagnoses or
+# predictions about a student's ability, health, or future performance.
+cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT, source_type TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolution_note TEXT DEFAULT '', resolved_at TEXT)")
+
 # Production-friendly schema version tracking. The app still performs the
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 9
-SCHEMA_DESCRIPTION = "Institutional integrations: OneRoster sync, LMS/SIS mappings, LTI registrations, and course sections"
+SCHEMA_VERSION = 10
+SCHEMA_DESCRIPTION = "Institutional analytics, academic support signals, support cases, and reporting"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -475,6 +482,207 @@ def database_health():
         return True, database_backend_label()
     except Exception:
         return False, database_backend_label()
+
+
+# ============================================================
+# STEP 10 HELPERS — INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT
+# ============================================================
+
+def _step10_now():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _safe_iso_days_ago(days):
+    return datetime.fromtimestamp(datetime.now().timestamp() - (int(days) * 86400)).isoformat(timespec="seconds")
+
+
+def step10_course_scope_rows(institution_id, department_id=None, term=None):
+    sql = (
+        "SELECT c.id, c.name, c.code, c.department_id, d.name, c.semester, c.credits, c.active "
+        "FROM institution_courses c LEFT JOIN departments d ON d.id = c.department_id "
+        "WHERE c.institution_id = ?"
+    )
+    params = [str(institution_id)]
+    if department_id:
+        sql += " AND c.department_id = ?"
+        params.append(str(department_id))
+    if term:
+        sql += " AND lower(COALESCE(c.semester, '')) = lower(?)"
+        params.append(str(term))
+    sql += " ORDER BY c.name"
+    return cursor.execute(sql, tuple(params)).fetchall()
+
+
+def step10_support_case_rows(institution_id, status=None, limit=100):
+    sql = (
+        "SELECT a.id, a.student_id, u.name, u.email, u.department, a.course_id, c.name, "
+        "a.source_type, a.priority, a.status, a.reason, a.created_at, a.updated_at, a.resolution_note "
+        "FROM academic_support_cases a "
+        "JOIN users u ON u.auth_id = a.student_id "
+        "LEFT JOIN institution_courses c ON c.id = a.course_id "
+        "WHERE a.institution_id = ?"
+    )
+    params = [str(institution_id)]
+    if status:
+        sql += " AND a.status = ?"
+        params.append(str(status))
+    sql += " ORDER BY CASE a.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, a.updated_at DESC LIMIT ?"
+    params.append(int(limit))
+    return cursor.execute(sql, tuple(params)).fetchall()
+
+
+def step10_create_support_case(actor_user_id, institution_id, student_id, course_id, source_type, priority, reason):
+    if not has_permission("manage_university"):
+        raise PermissionError("Only University Admin or Creator can create academic support cases.")
+    student = cursor.execute(
+        "SELECT auth_id FROM users WHERE auth_id = ? AND institution_id = ? AND role = 'student'",
+        (str(student_id), str(institution_id)),
+    ).fetchone()
+    if not student:
+        raise ValueError("Selected student is not part of this institution.")
+    if course_id:
+        course = cursor.execute(
+            "SELECT id FROM institution_courses WHERE id = ? AND institution_id = ?",
+            (str(course_id), str(institution_id)),
+        ).fetchone()
+        if not course:
+            raise ValueError("Selected course is not part of this institution.")
+    duplicate = cursor.execute(
+        "SELECT id FROM academic_support_cases WHERE institution_id = ? AND student_id = ? "
+        "AND COALESCE(course_id, '') = COALESCE(?, '') AND source_type = ? AND status IN ('open','monitoring')",
+        (str(institution_id), str(student_id), str(course_id or ""), str(source_type)),
+    ).fetchone()
+    if duplicate:
+        return str(duplicate[0])
+    now = _step10_now()
+    case_id = f"support-{uuid.uuid4().hex}"
+    cursor.execute(
+        "INSERT INTO academic_support_cases (id, institution_id, student_id, course_id, source_type, priority, status, reason, created_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+        (case_id, str(institution_id), str(student_id), str(course_id) if course_id else None, str(source_type), str(priority), str(reason)[:1000], str(actor_user_id), now, now),
+    )
+    conn.commit()
+    write_audit_log("academic_support_case_created", actor_user_id, st.session_state.get("user_role", "university_admin"), student_id, f"Created support case {case_id}; source={source_type}; priority={priority}")
+    return case_id
+
+
+def step10_update_support_case(actor_user_id, case_id, status, priority, resolution_note=""):
+    if not has_permission("manage_university"):
+        raise PermissionError("Only University Admin or Creator can manage academic support cases.")
+    existing = cursor.execute(
+        "SELECT student_id FROM academic_support_cases WHERE id = ? AND institution_id = ?",
+        (str(case_id), str(DEFAULT_INSTITUTION_ID)),
+    ).fetchone()
+    if not existing:
+        raise ValueError("Support case not found.")
+    now = _step10_now()
+    resolved_at = now if str(status).lower() == "resolved" else None
+    cursor.execute(
+        "UPDATE academic_support_cases SET status = ?, priority = ?, resolution_note = ?, updated_at = ?, resolved_at = ? WHERE id = ? AND institution_id = ?",
+        (str(status), str(priority), str(resolution_note or "")[:2000], now, resolved_at, str(case_id), str(DEFAULT_INSTITUTION_ID)),
+    )
+    conn.commit()
+    write_audit_log("academic_support_case_updated", actor_user_id, st.session_state.get("user_role", "university_admin"), existing[0], f"Updated support case {case_id}; status={status}; priority={priority}")
+
+
+def step10_student_activity_signals(institution_id, inactive_days=14):
+    cutoff = _safe_iso_days_ago(inactive_days)
+    rows = cursor.execute(
+        "SELECT u.auth_id, u.name, u.email, u.department, u.last_seen_at, COUNT(DISTINCT ce.course_id) "
+        "FROM users u JOIN course_enrollments ce ON ce.user_id = u.auth_id "
+        "JOIN institution_courses c ON c.id = ce.course_id "
+        "WHERE u.institution_id = ? AND u.role = 'student' AND u.account_status = 'active' "
+        "AND c.active = 1 AND (u.last_seen_at IS NULL OR trim(u.last_seen_at) = '' OR u.last_seen_at < ?) "
+        "GROUP BY u.auth_id, u.name, u.email, u.department, u.last_seen_at "
+        "ORDER BY u.last_seen_at ASC, u.name",
+        (str(institution_id), cutoff),
+    ).fetchall()
+    return rows
+
+
+def step10_section_signals(institution_id):
+    rows = cursor.execute(
+        "SELECT s.id, s.name, s.section_code, s.capacity, c.id, c.name, "
+        "COALESCE((SELECT COUNT(*) FROM section_enrollments se WHERE se.section_id = s.id AND se.role = 'student' AND se.status = 'active'), 0), "
+        "COALESCE((SELECT COUNT(*) FROM course_faculty cf WHERE cf.course_id = c.id), 0) "
+        "FROM course_sections s JOIN institution_courses c ON c.id = s.course_id "
+        "WHERE s.institution_id = ? AND s.active = 1 AND c.active = 1 ORDER BY c.name, s.name",
+        (str(institution_id),),
+    ).fetchall()
+    return rows
+
+
+def step10_course_quality_signals(institution_id, department_id=None, term=None):
+    courses = step10_course_scope_rows(institution_id, department_id, term)
+    results = []
+    for c in courses:
+        course_id = str(c[0])
+        materials = int(cursor.execute("SELECT COUNT(*) FROM course_materials WHERE course_id = ?", (course_id,)).fetchone()[0] or 0)
+        assignments = int(cursor.execute("SELECT COUNT(*) FROM course_assignments WHERE course_id = ?", (course_id,)).fetchone()[0] or 0)
+        sections = int(cursor.execute("SELECT COUNT(*) FROM course_sections WHERE course_id = ? AND active = 1", (course_id,)).fetchone()[0] or 0)
+        faculty = int(cursor.execute("SELECT COUNT(*) FROM course_faculty WHERE course_id = ?", (course_id,)).fetchone()[0] or 0)
+        enrollments = int(cursor.execute("SELECT COUNT(*) FROM course_enrollments WHERE course_id = ?", (course_id,)).fetchone()[0] or 0)
+        results.append({
+            "Course": c[1], "Code": c[2] or "—", "Department": c[4] or "—", "Term": c[5] or "—",
+            "Sections": sections, "Faculty": faculty, "Enrollments": enrollments,
+            "Materials": materials, "Assignments": assignments,
+            "Needs attention": "Yes" if (sections == 0 or faculty == 0 or materials == 0 or assignments == 0) else "No",
+        })
+    return results
+
+
+def step10_user_role_counts(institution_id):
+    rows = cursor.execute(
+        "SELECT role, COUNT(*) FROM users WHERE institution_id = ? AND account_status = 'active' GROUP BY role ORDER BY role",
+        (str(institution_id),),
+    ).fetchall()
+    label_map = {"creator": "Creator", "university_admin": "University Admin", "faculty": "Faculty", "student": "Student", "academic_advisor": "Academic Advisor"}
+    return [{"Role": label_map.get(str(r[0]), str(r[0] or "Student").title()), "Users": int(r[1] or 0)} for r in rows]
+
+
+def step10_enrollment_by_course(institution_id, department_id=None, term=None, limit=20):
+    sql = (
+        "SELECT c.name, COALESCE(c.code, ''), COUNT(ce.user_id) "
+        "FROM institution_courses c LEFT JOIN course_enrollments ce ON ce.course_id = c.id "
+        "WHERE c.institution_id = ? AND c.active = 1"
+    )
+    params = [str(institution_id)]
+    if department_id:
+        sql += " AND c.department_id = ?"
+        params.append(str(department_id))
+    if term:
+        sql += " AND lower(COALESCE(c.semester, '')) = lower(?)"
+        params.append(str(term))
+    sql += " GROUP BY c.id, c.name, c.code ORDER BY COUNT(ce.user_id) DESC, c.name LIMIT ?"
+    params.append(int(limit))
+    rows = cursor.execute(sql, tuple(params)).fetchall()
+    return [{"Course": r[0] + (f" ({r[1]})" if r[1] else ""), "Enrollments": int(r[2] or 0)} for r in rows]
+
+
+def step10_ai_usage_by_day(institution_id, days=30):
+    cutoff = _safe_iso_days_ago(days)
+    rows = cursor.execute(
+        "SELECT substr(m.created_at, 1, 10), COUNT(*) FROM chat_messages m JOIN users u ON u.auth_id = m.user_id "
+        "WHERE u.institution_id = ? AND m.created_at >= ? GROUP BY substr(m.created_at, 1, 10) ORDER BY substr(m.created_at, 1, 10)",
+        (str(institution_id), cutoff),
+    ).fetchall()
+    return [{"Date": r[0], "AI messages": int(r[1] or 0)} for r in rows]
+
+
+def step10_generate_report_csv(institution_id, course_quality_rows, support_rows):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["StudySphere Institutional Report", institution_name(institution_id), _step10_now()])
+    writer.writerow([])
+    writer.writerow(["Course", "Code", "Department", "Term", "Sections", "Faculty", "Enrollments", "Materials", "Assignments", "Needs attention"])
+    for item in course_quality_rows:
+        writer.writerow([item[k] for k in ["Course", "Code", "Department", "Term", "Sections", "Faculty", "Enrollments", "Materials", "Assignments", "Needs attention"]])
+    writer.writerow([])
+    writer.writerow(["Open/Monitoring Academic Support Cases"])
+    writer.writerow(["Student", "Email", "Department", "Course", "Source", "Priority", "Status", "Reason", "Updated"])
+    for r in support_rows:
+        writer.writerow([r[2], r[3], r[4] or "", r[6] or "", r[7], r[8], r[9], r[10], r[12]])
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 # ============================================================
@@ -1068,6 +1276,7 @@ def role_label(value):
         "university_admin": "University Admin",
         "faculty": "Faculty",
         "student": "Student",
+        "academic_advisor": "Academic Advisor",
     }.get(str(value or "student").lower(), "Student")
 
 
@@ -1086,6 +1295,10 @@ ROLE_PERMISSIONS = {
         "use_ai_agent", "use_presentation_studio", "use_document_converter",
         "manage_faculty_courses", "use_faculty_ai", "manage_university",
         "view_university_analytics",
+    },
+    "academic_advisor": {
+        "view_dashboard", "manage_personal_academics", "view_my_university",
+        "use_ai_agent", "use_presentation_studio", "use_document_converter",
     },
     "creator": {
         "view_dashboard", "manage_personal_academics", "view_my_university",
@@ -4334,6 +4547,7 @@ nav_options = [
 ]
 if has_permission("manage_university"):
     nav_options.append((17, "🔗  Integration Center"))
+    nav_options.append((18, "📈  Institutional Analytics"))
 if has_permission("manage_users"):
     nav_options.append((11, "🔐  Creator Dashboard"))
 if has_permission("manage_faculty_courses"):
@@ -4360,6 +4574,9 @@ if st.session_state.page == 16 and not has_permission("use_ai_agent"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 17 and not has_permission("manage_university"):
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 18 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 
@@ -4406,6 +4623,9 @@ if has_permission("manage_university"):
         st.rerun()
     if st.sidebar.button("🔗 Integration Center", key="integration_center_sidebar", use_container_width=True):
         st.session_state.page = 17
+        st.rerun()
+    if st.sidebar.button("📈 Institutional Analytics", key="institutional_analytics_sidebar", use_container_width=True):
+        st.session_state.page = 18
         st.rerun()
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
@@ -5661,6 +5881,171 @@ elif st.session_state.page == 17 and st.session_state.user_role in {"university_
 
         st.markdown('<div class="ai-panel"><div class="ai-badge">Step 9 • Institutional Integrations</div><div class="ai-title">🔗 StudySphere is ready to exchange university identity and roster data</div><div class="ai-text">University SSO diagnostics, OneRoster 1.2 CSV import/export, external-ID mappings, LTI platform registrations, and synchronization history are now part of the institutional administration layer.</div></div>', unsafe_allow_html=True)
 
+elif st.session_state.page == 18 and st.session_state.user_role in {"university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">📈 Institutional Analytics</div><div class="page-sub">University-wide reporting and human-review academic support signals built from authorized StudySphere data.</div></div>', unsafe_allow_html=True)
+
+    institution_id = DEFAULT_INSTITUTION_ID
+    dept_rows = cursor.execute("SELECT id, name, code FROM departments WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
+    dept_map = {"All departments": None}
+    dept_map.update({f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r[0] for r in dept_rows})
+    filter_col1, filter_col2, filter_col3 = st.columns([1.25, 1.0, 1.0])
+    with filter_col1:
+        analytics_dept_choice = st.selectbox("Department", list(dept_map.keys()), key="step10_department")
+    analytics_dept_id = dept_map[analytics_dept_choice]
+    term_rows = cursor.execute("SELECT DISTINCT semester FROM institution_courses WHERE institution_id = ? AND active = 1 AND trim(COALESCE(semester, '')) != '' ORDER BY semester", (institution_id,)).fetchall()
+    term_map = {"All terms": None}
+    term_map.update({str(r[0]): str(r[0]) for r in term_rows})
+    with filter_col2:
+        analytics_term_choice = st.selectbox("Academic term", list(term_map.keys()), key="step10_term")
+    analytics_term = term_map[analytics_term_choice]
+    with filter_col3:
+        inactivity_days = st.selectbox("Activity signal window", [7, 14, 21, 30], index=1, format_func=lambda x: f"No activity for {x} days", key="step10_inactivity_days")
+
+    role_counts = step10_user_role_counts(institution_id)
+    course_rows = step10_course_scope_rows(institution_id, analytics_dept_id, analytics_term)
+    active_students = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active'").fetchone()[0] or 0)
+    active_30d = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active' AND last_seen_at >= ?", (institution_id, _safe_iso_days_ago(30))).fetchone()[0] or 0)
+    enrolled_students = int(cursor.execute("SELECT COUNT(DISTINCT ce.user_id) FROM course_enrollments ce JOIN institution_courses c ON c.id = ce.course_id WHERE c.institution_id = ? AND c.active = 1", (institution_id,)).fetchone()[0] or 0)
+    faculty_count = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'faculty' AND account_status = 'active'", (institution_id,)).fetchone()[0] or 0)
+    course_count = len(course_rows)
+    section_count = int(cursor.execute("SELECT COUNT(*) FROM course_sections s JOIN institution_courses c ON c.id = s.course_id WHERE c.institution_id = ? AND c.active = 1 AND s.active = 1", (institution_id,)).fetchone()[0] or 0)
+    ai_messages_30d = int(cursor.execute("SELECT COUNT(*) FROM chat_messages m JOIN users u ON u.auth_id = m.user_id WHERE u.institution_id = ? AND m.created_at >= ?", (institution_id, _safe_iso_days_ago(30))).fetchone()[0] or 0)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Active students", active_students)
+    k2.metric("Active • 30d", active_30d)
+    k3.metric("Enrolled students", enrolled_students)
+    k4.metric("Faculty", faculty_count)
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Courses in filter", course_count)
+    k6.metric("Active sections", section_count)
+    k7.metric("AI messages • 30d", ai_messages_30d)
+    k8.metric("Support cases", len(step10_support_case_rows(institution_id, status=None, limit=1000)))
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📊 Institutional overview</div><div class="panel-sub">Operational metrics only. Student support signals are presented for authorized human follow-up.</div></div>', unsafe_allow_html=True)
+    ov_left, ov_right = st.columns(2)
+    with ov_left:
+        if role_counts:
+            st.markdown("**Users by role**")
+            st.bar_chart(role_counts, x="Role", y="Users")
+        else:
+            st.info("No active users found.")
+    with ov_right:
+        enrollment_chart = step10_enrollment_by_course(institution_id, analytics_dept_id, analytics_term)
+        if enrollment_chart:
+            st.markdown("**Enrollments by course**")
+            st.bar_chart(enrollment_chart, x="Course", y="Enrollments")
+        else:
+            st.info("No course enrollment data found for the selected filters.")
+
+    ai_day_chart = step10_ai_usage_by_day(institution_id, days=30)
+    if ai_day_chart:
+        st.markdown("**AI activity • last 30 days**")
+        st.line_chart(ai_day_chart, x="Date", y="AI messages")
+
+    course_quality_rows = step10_course_quality_signals(institution_id, analytics_dept_id, analytics_term)
+    st.markdown('<div class="panel"><div class="panel-title">📚 Course health</div><div class="panel-sub">Operational completeness signals for courses and sections. They are not quality scores.</div></div>', unsafe_allow_html=True)
+    if course_quality_rows:
+        st.dataframe(course_quality_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No courses match the selected filters.")
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🧭 Academic support signals</div><div class="panel-sub">Signals are designed to help authorized staff decide whether a human follow-up is appropriate. They are not automated risk predictions or decisions.</div></div>', unsafe_allow_html=True)
+    activity_signals = step10_student_activity_signals(institution_id, inactivity_days)
+    sec_signals = step10_section_signals(institution_id)
+    over_capacity = [r for r in sec_signals if int(r[3] or 0) > 0 and int(r[6] or 0) > int(r[3] or 0)]
+    unstaffed = [r for r in sec_signals if int(r[7] or 0) == 0]
+    missing_course_setup = [r for r in course_quality_rows if r["Materials"] == 0 or r["Assignments"] == 0]
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Inactive enrolled students", len(activity_signals))
+    s2.metric("Sections over capacity", len(over_capacity))
+    s3.metric("Sections without faculty", len(unstaffed))
+    s4.metric("Courses missing materials/assignments", len(missing_course_setup))
+
+    sig_tab1, sig_tab2, sig_tab3 = st.tabs(["👤 Student activity", "🏫 Section operations", "📘 Course setup"])
+    with sig_tab1:
+        if activity_signals:
+            activity_view = [
+                {"Student": r[1] or "—", "Email": r[2] or "—", "Department": r[3] or "—", "Last seen": r[4] or "Never", "Enrolled courses": int(r[5] or 0)}
+                for r in activity_signals
+            ]
+            st.dataframe(activity_view, use_container_width=True, hide_index=True)
+            student_labels = [f"{r[1] or 'Student'} • {r[2] or r[0]}" for r in activity_signals]
+            selected_student_label = st.selectbox("Create a support case for", student_labels, key="step10_support_student")
+            selected_student = activity_signals[student_labels.index(selected_student_label)]
+            selected_reason = st.text_area("Support reason", value=f"No StudySphere activity detected for the selected threshold ({inactivity_days} days). Review the student's situation and decide whether human outreach is appropriate.", key="step10_support_reason")
+            selected_priority = st.selectbox("Priority", ["low", "medium", "high"], index=1, key="step10_support_priority")
+            if st.button("📝 Create support case", key="step10_create_case", use_container_width=True):
+                try:
+                    case_id = step10_create_support_case(AUTH_ID, institution_id, selected_student[0], None, "inactivity_signal", selected_priority, selected_reason)
+                    st.success(f"Support case created: {case_id}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not create support case: {type(exc).__name__}: {exc}")
+        else:
+            st.success("No inactive enrolled-student signals match the selected threshold.")
+
+    with sig_tab2:
+        if over_capacity or unstaffed:
+            section_view = []
+            for r in sec_signals:
+                reasons = []
+                if int(r[3] or 0) > 0 and int(r[6] or 0) > int(r[3] or 0):
+                    reasons.append("Over capacity")
+                if int(r[7] or 0) == 0:
+                    reasons.append("No assigned faculty")
+                if reasons:
+                    section_view.append({"Course": r[5], "Section": r[1], "Code": r[2] or "—", "Capacity": int(r[3] or 0) or "—", "Enrolled": int(r[6] or 0), "Faculty links": int(r[7] or 0), "Signal": "; ".join(reasons)})
+            st.dataframe(section_view, use_container_width=True, hide_index=True)
+        else:
+            st.success("No section-capacity or faculty-assignment signals detected.")
+
+    with sig_tab3:
+        if missing_course_setup:
+            st.dataframe(missing_course_setup, use_container_width=True, hide_index=True)
+        else:
+            st.success("All filtered courses have at least one stored material and one course assignment.")
+
+    support_rows = step10_support_case_rows(institution_id, status=None, limit=100)
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📝 Human-review support queue</div><div class="panel-sub">Track open, monitoring and resolved academic-support cases without presenting them as automated student judgments.</div></div>', unsafe_allow_html=True)
+    if support_rows:
+        queue_view = [
+            {"Case": r[0], "Student": r[2] or "—", "Department": r[4] or "—", "Course": r[6] or "—", "Source": r[7], "Priority": r[8], "Status": r[9], "Reason": r[10], "Updated": r[12]}
+            for r in support_rows
+        ]
+        st.dataframe(queue_view, use_container_width=True, hide_index=True)
+        case_labels = [f"{r[0]} • {r[2] or 'Student'} • {r[9]}" for r in support_rows]
+        selected_case_label = st.selectbox("Select a support case", case_labels, key="step10_case_selector")
+        selected_case = support_rows[case_labels.index(selected_case_label)]
+        u1, u2 = st.columns(2)
+        with u1:
+            case_status = st.selectbox("Case status", ["open", "monitoring", "resolved"], index=["open", "monitoring", "resolved"].index(str(selected_case[9])) if str(selected_case[9]) in {"open", "monitoring", "resolved"} else 0, key="step10_case_status")
+        with u2:
+            case_priority = st.selectbox("Case priority", ["low", "medium", "high"], index=["low", "medium", "high"].index(str(selected_case[8])) if str(selected_case[8]) in {"low", "medium", "high"} else 1, key="step10_case_priority")
+        case_note = st.text_area("Human follow-up note", value=selected_case[13] or "", key="step10_case_note")
+        if st.button("💾 Update support case", key="step10_update_case", use_container_width=True):
+            try:
+                step10_update_support_case(AUTH_ID, selected_case[0], case_status, case_priority, case_note)
+                st.success("Support case updated.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not update support case: {type(exc).__name__}: {exc}")
+    else:
+        st.info("No academic support cases have been created yet.")
+
+    report_csv = step10_generate_report_csv(institution_id, course_quality_rows, support_rows)
+    st.download_button(
+        "⬇️ Export institutional report (CSV)",
+        data=report_csv,
+        file_name=f"studysphere_institutional_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="step10_report_download",
+    )
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Step 10 • Institutional Analytics + Academic Support</div><div class="ai-title">📈 Measure the institution, support people with humans in the loop</div><div class="ai-text">StudySphere now combines institutional reporting with operational and activity signals. Support cases are explicitly human-review records; the system does not make automated decisions about a student’s ability, health, or future.</div></div>', unsafe_allow_html=True)
+
 elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
 
@@ -5802,8 +6187,8 @@ elif st.session_state.page == 13 and st.session_state.user_role in {"university_
         st.info("There are no student accounts available for enrollment yet.")
 
     st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👤 University user directory</div><div class="panel-sub">Institution-scoped users and their roles.</div></div>', unsafe_allow_html=True)
-    role_filter = st.selectbox("Filter users", ["All", "Student", "Faculty", "University Admin"], key="admin_role_filter")
-    role_filter_map = {"All": None, "Student": "student", "Faculty": "faculty", "University Admin": "university_admin"}
+    role_filter = st.selectbox("Filter users", ["All", "Student", "Faculty", "University Admin", "Academic Advisor"], key="admin_role_filter")
+    role_filter_map = {"All": None, "Student": "student", "Faculty": "faculty", "University Admin": "university_admin", "Academic Advisor": "academic_advisor"}
     filter_role = role_filter_map[role_filter]
     if filter_role:
         institution_user_rows = cursor.execute("SELECT name, email, role, department, degree, semester, created_at, last_login_at, last_seen_at FROM users WHERE institution_id = ? AND role = ? ORDER BY name", (institution_id, filter_role)).fetchall()
@@ -6104,12 +6489,12 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
         if selected_role == "creator":
             st.info("The creator role is protected. Use the configured creator email to control the main creator account.")
         else:
-            role_options = ["student", "faculty", "university_admin"]
+            role_options = ["student", "faculty", "university_admin", "academic_advisor"]
             role_choice = st.selectbox(
                 "Assign role to selected user",
                 role_options,
                 index=role_options.index(selected_role) if selected_role in role_options else 0,
-                format_func=lambda value: {"student": "Student", "faculty": "Faculty", "university_admin": "University Admin"}.get(value, value),
+                format_func=lambda value: {"student": "Student", "faculty": "Faculty", "university_admin": "University Admin", "academic_advisor": "Academic Advisor"}.get(value, value),
                 key="creator_role_assignment",
             )
             department_choice = st.text_input("Assign department", value=(selected[8] or "") if selected else "", key="creator_department_assignment")
