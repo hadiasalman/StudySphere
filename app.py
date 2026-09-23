@@ -12,6 +12,7 @@ import time
 import csv
 import sqlite3
 import uuid
+import zipfile
 from collections import Counter
 from datetime import date, datetime
 
@@ -438,12 +439,26 @@ cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY K
 # authorization at retrieval time.
 cursor.execute("CREATE TABLE IF NOT EXISTS university_knowledge_sources (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, scope_type TEXT NOT NULL DEFAULT 'university', department_id TEXT, category TEXT NOT NULL DEFAULT 'General', title TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, file_hash TEXT NOT NULL, uploaded_by TEXT NOT NULL, uploaded_at TEXT NOT NULL, active INTEGER DEFAULT 1)")
 
+# ============================================================
+# INTEGRATION FOUNDATION (STEP 9)
+# ============================================================
+# The integration layer is deliberately additive: existing StudySphere
+# student/faculty/course data remains intact, while external LMS/SIS identity
+# mappings, OneRoster sync runs, LTI registrations, and LMS sections can be
+# tracked separately.
+cursor.execute("CREATE TABLE IF NOT EXISTS integration_configs (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, integration_type TEXT NOT NULL, name TEXT NOT NULL, config_json TEXT NOT NULL DEFAULT '{}', active INTEGER DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS integration_sync_runs (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, direction TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, users_created INTEGER DEFAULT 0, users_updated INTEGER DEFAULT 0, courses_created INTEGER DEFAULT 0, courses_updated INTEGER DEFAULT 0, sections_created INTEGER DEFAULT 0, enrollments_created INTEGER DEFAULT 0, faculty_assignments_created INTEGER DEFAULT 0, message TEXT DEFAULT '')")
+cursor.execute("CREATE TABLE IF NOT EXISTS integration_external_mappings (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, integration_type TEXT NOT NULL, entity_type TEXT NOT NULL, local_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(institution_id, integration_type, entity_type, external_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS lti_registrations (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, platform_name TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL, deployment_id TEXT, authorization_endpoint TEXT, token_endpoint TEXT, jwks_url TEXT, active INTEGER DEFAULT 1, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(institution_id, issuer, client_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS section_enrollments (section_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'active', enrolled_at TEXT NOT NULL, PRIMARY KEY(section_id, user_id, role))")
+
 # Production-friendly schema version tracking. The app still performs the
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 8
-SCHEMA_DESCRIPTION = "University knowledge platform: scoped institutional knowledge, grounded AI workspace, source catalog, and AI retrieval controls"
+SCHEMA_VERSION = 9
+SCHEMA_DESCRIPTION = "Institutional integrations: OneRoster sync, LMS/SIS mappings, LTI registrations, and course sections"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -460,6 +475,470 @@ def database_health():
         return True, database_backend_label()
     except Exception:
         return False, database_backend_label()
+
+
+# ============================================================
+# INTEGRATION HELPERS — STEP 9
+# ============================================================
+
+INTEGRATION_TYPES = {
+    "OneRoster": "oneroster",
+    "LTI 1.3": "lti",
+    "LMS API": "lms_api",
+}
+
+
+def _integration_config_rows(institution_id):
+    return cursor.execute(
+        "SELECT id, integration_type, name, config_json, active, created_at, updated_at FROM integration_configs WHERE institution_id = ? ORDER BY integration_type, name",
+        (str(institution_id),),
+    ).fetchall()
+
+
+def _get_integration_config(institution_id, integration_type, name=None):
+    sql = "SELECT id, integration_type, name, config_json, active FROM integration_configs WHERE institution_id = ? AND integration_type = ?"
+    params = [str(institution_id), str(integration_type)]
+    if name is not None:
+        sql += " AND name = ?"
+        params.append(str(name))
+    sql += " ORDER BY updated_at DESC LIMIT 1"
+    row = cursor.execute(sql, tuple(params)).fetchone()
+    if not row:
+        return None
+    try:
+        config = json.loads(row[3] or "{}")
+    except Exception:
+        config = {}
+    return {"id": row[0], "integration_type": row[1], "name": row[2], "config": config, "active": bool(row[4])}
+
+
+def save_integration_config(user_id, institution_id, integration_type, name, config, active=True):
+    if not has_permission("manage_university") and not has_permission("manage_users"):
+        raise PermissionError("Only University Admin or Creator can manage integrations.")
+    integration_type = str(integration_type).strip().lower()
+    name = clean_name(name)
+    if not integration_type or not name:
+        raise ValueError("Integration type and name are required.")
+    now = datetime.now().isoformat(timespec="seconds")
+    encoded = json.dumps(dict(config or {}), ensure_ascii=False, sort_keys=True)
+    existing = cursor.execute(
+        "SELECT id FROM integration_configs WHERE institution_id = ? AND integration_type = ? AND name = ?",
+        (str(institution_id), integration_type, name),
+    ).fetchone()
+    if existing:
+        integration_id = str(existing[0])
+        cursor.execute(
+            "UPDATE integration_configs SET config_json = ?, active = ?, updated_at = ? WHERE id = ? AND institution_id = ?",
+            (encoded, 1 if active else 0, now, integration_id, str(institution_id)),
+        )
+    else:
+        integration_id = f"integration-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO integration_configs (id, institution_id, integration_type, name, config_json, active, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (integration_id, str(institution_id), integration_type, name, encoded, 1 if active else 0, str(user_id), now, now),
+        )
+    conn.commit()
+    write_audit_log("integration_config_saved", user_id, st.session_state.get("user_role", "university_admin"), None, f"Saved integration {integration_type}:{name}")
+    return integration_id
+
+
+def set_integration_active(user_id, institution_id, integration_id, active):
+    if not has_permission("manage_university") and not has_permission("manage_users"):
+        raise PermissionError("Only University Admin or Creator can manage integrations.")
+    cursor.execute(
+        "UPDATE integration_configs SET active = ?, updated_at = ? WHERE id = ? AND institution_id = ?",
+        (1 if active else 0, datetime.now().isoformat(timespec="seconds"), str(integration_id), str(institution_id)),
+    )
+    conn.commit()
+    write_audit_log("integration_status_changed", user_id, st.session_state.get("user_role", "university_admin"), None, f"Integration {integration_id} active={bool(active)}")
+
+
+def _save_external_mapping(institution_id, integration_type, entity_type, local_id, external_id):
+    if not external_id:
+        return
+    existing = cursor.execute(
+        "SELECT id, local_id FROM integration_external_mappings WHERE institution_id = ? AND integration_type = ? AND entity_type = ? AND external_id = ?",
+        (str(institution_id), str(integration_type), str(entity_type), str(external_id)),
+    ).fetchone()
+    now = datetime.now().isoformat(timespec="seconds")
+    if existing:
+        cursor.execute(
+            "UPDATE integration_external_mappings SET local_id = ? WHERE id = ?",
+            (str(local_id), str(existing[0])),
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO integration_external_mappings (id, institution_id, integration_type, entity_type, local_id, external_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (f"mapping-{uuid.uuid4().hex}", str(institution_id), str(integration_type), str(entity_type), str(local_id), str(external_id), now),
+        )
+
+
+def _get_external_mapping(institution_id, integration_type, entity_type, external_id):
+    return cursor.execute(
+        "SELECT local_id FROM integration_external_mappings WHERE institution_id = ? AND integration_type = ? AND entity_type = ? AND external_id = ?",
+        (str(institution_id), str(integration_type), str(entity_type), str(external_id)),
+    ).fetchone()
+
+
+def _csv_rows(uploaded_file):
+    raw = uploaded_file.getvalue()
+    text_value = raw.decode("utf-8-sig", errors="replace")
+    return list(csv.DictReader(io.StringIO(text_value)))
+
+
+def _csv_field(row, *names):
+    for name in names:
+        value = row.get(name)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _oneroster_role_to_studysphere(role):
+    role = str(role or "").strip().lower()
+    if "teacher" in role or "instructor" in role:
+        return "faculty"
+    # Do not automatically grant university-admin privileges from external roster files.
+    return "student"
+
+
+def _find_or_create_user_from_oneroster(row, institution_id, actor_user_id):
+    external_id = _csv_field(row, "sourcedId", "sourcedID", "userSourcedId")
+    email = clean_email(_csv_field(row, "email", "emailAddress"))
+    username = _csv_field(row, "username")
+    given = _csv_field(row, "givenName", "givenname")
+    family = _csv_field(row, "familyName", "familyname")
+    name = clean_name(_csv_field(row, "name")) or clean_name(" ".join(x for x in [given, family] if x)) or username or (email.split("@")[0] if email else "Imported User")
+    role = _oneroster_role_to_studysphere(_csv_field(row, "role", "roles"))
+
+    local_id = None
+    if external_id:
+        mapped = _get_external_mapping(institution_id, "oneroster", "user", external_id)
+        if mapped:
+            local_id = str(mapped[0])
+    if not local_id and email:
+        found = cursor.execute("SELECT auth_id FROM users WHERE institution_id = ? AND lower(email) = ?", (str(institution_id), email)).fetchone()
+        if found:
+            local_id = str(found[0])
+
+    now = datetime.now().isoformat(timespec="seconds")
+    if local_id:
+        cursor.execute(
+            "UPDATE users SET name = ?, last_seen_at = ?, role = CASE WHEN role IN ('creator','university_admin') THEN role ELSE ? END, auth_provider = CASE WHEN auth_provider IS NULL OR trim(auth_provider) = '' THEN 'oneroster' ELSE auth_provider END WHERE auth_id = ? AND institution_id = ?",
+            (name, now, role, local_id, str(institution_id)),
+        )
+        created = False
+    else:
+        local_id = f"roster-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO users (auth_id, name, email, created_at, last_seen_at, role, institution_id, auth_provider, last_auth_method, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'oneroster', 'oneroster_sync', 'active')",
+            (local_id, name, email or f"{local_id}@import.invalid", now, now, role, str(institution_id)),
+        )
+        created = True
+        write_audit_log("oneroster_user_created", actor_user_id, st.session_state.get("user_role", "university_admin"), local_id, f"Imported user {name}")
+    if external_id:
+        _save_external_mapping(institution_id, "oneroster", "user", local_id, external_id)
+    return local_id, created
+
+
+def _find_or_create_course_from_oneroster(row, institution_id, actor_user_id):
+    external_id = _csv_field(row, "sourcedId", "sourcedID", "courseSourcedId")
+    title = clean_name(_csv_field(row, "title", "courseTitle", "name")) or "Imported Course"
+    code = clean_name(_csv_field(row, "courseCode", "code"))
+    description = str(_csv_field(row, "description") or "")[:5000]
+    local_id = None
+    if external_id:
+        mapped = _get_external_mapping(institution_id, "oneroster", "course", external_id)
+        if mapped:
+            local_id = str(mapped[0])
+    if not local_id:
+        found = cursor.execute(
+            "SELECT id FROM institution_courses WHERE institution_id = ? AND lower(name) = lower(?) AND lower(COALESCE(code,'')) = lower(?) ORDER BY created_at LIMIT 1",
+            (str(institution_id), title, code),
+        ).fetchone()
+        if found:
+            local_id = str(found[0])
+    now = datetime.now().isoformat(timespec="seconds")
+    if local_id:
+        cursor.execute(
+            "UPDATE institution_courses SET name = ?, code = ?, description = ?, active = 1 WHERE id = ? AND institution_id = ?",
+            (title, code, description, local_id, str(institution_id)),
+        )
+        created = False
+    else:
+        local_id = f"course-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO institution_courses (id, institution_id, department_id, name, code, description, semester, credits, created_by, created_at, active) VALUES (?, ?, NULL, ?, ?, ?, '', 3, ?, ?, 1)",
+            (local_id, str(institution_id), title, code, description, str(actor_user_id), now),
+        )
+        created = True
+    if external_id:
+        _save_external_mapping(institution_id, "oneroster", "course", local_id, external_id)
+    return local_id, created
+
+
+def _find_or_create_section_from_oneroster(row, institution_id, course_id):
+    external_id = _csv_field(row, "sourcedId", "sourcedID", "classSourcedId")
+    name = clean_name(_csv_field(row, "title", "name", "className")) or "Imported Section"
+    section_code = clean_name(_csv_field(row, "classCode", "sectionCode", "code"))
+    term = clean_name(_csv_field(row, "termSourcedId", "term", "academicSessionSourcedId"))
+    room = clean_name(_csv_field(row, "room"))
+    schedule = clean_name(_csv_field(row, "schedule"))
+    capacity_raw = _csv_field(row, "capacity")
+    try:
+        capacity = max(0, int(float(capacity_raw))) if capacity_raw else 0
+    except Exception:
+        capacity = 0
+    local_id = None
+    if external_id:
+        mapped = _get_external_mapping(institution_id, "oneroster", "class", external_id)
+        if mapped:
+            local_id = str(mapped[0])
+    now = datetime.now().isoformat(timespec="seconds")
+    if local_id:
+        cursor.execute(
+            "UPDATE course_sections SET course_id = ?, name = ?, section_code = ?, term = ?, room = ?, schedule = ?, capacity = ?, active = 1, updated_at = ? WHERE id = ? AND institution_id = ?",
+            (str(course_id), name, section_code, term, room, schedule, capacity, now, local_id, str(institution_id)),
+        )
+        created = False
+    else:
+        local_id = f"section-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (local_id, str(institution_id), str(course_id), external_id, name, section_code, term, room, schedule, capacity, now, now),
+        )
+        created = True
+    if external_id:
+        _save_external_mapping(institution_id, "oneroster", "class", local_id, external_id)
+    return local_id, created
+
+
+def import_oneroster_csv_bundle(uploaded_files, institution_id, actor_user_id):
+    """Import a practical OneRoster 1.2 CSV bundle without changing existing records destructively."""
+    files_by_name = {str(f.name).lower(): f for f in (uploaded_files or [])}
+    def find_file(prefix):
+        for name, file_obj in files_by_name.items():
+            if name == prefix or name.startswith(prefix + ".") or name.startswith(prefix + "_") or name.startswith(prefix + "-"):
+                return file_obj
+        return None
+
+    users_file = find_file("users")
+    courses_file = find_file("courses")
+    classes_file = find_file("classes")
+    enrollments_file = find_file("enrollments")
+    if not any([users_file, courses_file, classes_file, enrollments_file]):
+        raise ValueError("Upload one or more OneRoster CSV files such as users.csv, courses.csv, classes.csv, and enrollments.csv.")
+
+    integration = _get_integration_config(institution_id, "oneroster", "University OneRoster")
+    if integration:
+        integration_id = integration["id"]
+    else:
+        integration_id = save_integration_config(actor_user_id, institution_id, "oneroster", "University OneRoster", {"mode": "csv"}, active=True)
+
+    run_id = f"sync-{uuid.uuid4().hex}"
+    started = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO integration_sync_runs (id, integration_id, direction, status, started_at) VALUES (?, ?, 'inbound', 'running', ?)",
+        (run_id, integration_id, started),
+    )
+    counts = {"users_created": 0, "users_updated": 0, "courses_created": 0, "courses_updated": 0, "sections_created": 0, "enrollments_created": 0, "faculty_assignments_created": 0}
+    try:
+        if users_file:
+            for row in _csv_rows(users_file):
+                _, created = _find_or_create_user_from_oneroster(row, institution_id, actor_user_id)
+                counts["users_created" if created else "users_updated"] += 1
+
+        if courses_file:
+            for row in _csv_rows(courses_file):
+                _, created = _find_or_create_course_from_oneroster(row, institution_id, actor_user_id)
+                counts["courses_created" if created else "courses_updated"] += 1
+
+        if classes_file:
+            for row in _csv_rows(classes_file):
+                course_external_id = _csv_field(row, "courseSourcedId", "courseSourcedID", "courseId")
+                course_local = _get_external_mapping(institution_id, "oneroster", "course", course_external_id) if course_external_id else None
+                if course_local:
+                    _, created = _find_or_create_section_from_oneroster(row, institution_id, course_local[0])
+                    counts["sections_created"] += 1 if created else 0
+
+        if enrollments_file:
+            for row in _csv_rows(enrollments_file):
+                class_external_id = _csv_field(row, "classSourcedId", "classSourcedID", "classId")
+                user_external_id = _csv_field(row, "userSourcedId", "userSourcedID", "userId")
+                role = _oneroster_role_to_studysphere(_csv_field(row, "role"))
+                section_local = _get_external_mapping(institution_id, "oneroster", "class", class_external_id) if class_external_id else None
+                user_local = _get_external_mapping(institution_id, "oneroster", "user", user_external_id) if user_external_id else None
+                if not section_local or not user_local:
+                    continue
+                section_id = str(section_local[0])
+                user_id = str(user_local[0])
+                exists = cursor.execute(
+                    "SELECT 1 FROM section_enrollments WHERE section_id = ? AND user_id = ? AND role = ?",
+                    (section_id, user_id, role),
+                ).fetchone()
+                if not exists:
+                    cursor.execute(
+                        "INSERT INTO section_enrollments (section_id, user_id, role, status, enrolled_at) VALUES (?, ?, ?, 'active', ?)",
+                        (section_id, user_id, role, datetime.now().isoformat(timespec="seconds")),
+                    )
+                    counts["enrollments_created"] += 1
+                    course_row = cursor.execute("SELECT course_id FROM course_sections WHERE id = ?", (section_id,)).fetchone()
+                    course_id = str(course_row[0]) if course_row else ""
+                    if course_id and role == "student":
+                        ce_exists = cursor.execute("SELECT 1 FROM course_enrollments WHERE course_id = ? AND user_id = ?", (course_id, user_id)).fetchone()
+                        if not ce_exists:
+                            cursor.execute(
+                                "INSERT INTO course_enrollments (course_id, user_id, enrolled_at, enrolled_by) VALUES (?, ?, ?, ?)",
+                                (course_id, user_id, datetime.now().isoformat(timespec="seconds"), actor_user_id),
+                            )
+                    elif course_id and role == "faculty":
+                        cf_exists = cursor.execute("SELECT 1 FROM course_faculty WHERE course_id = ? AND user_id = ?", (course_id, user_id)).fetchone()
+                        if not cf_exists:
+                            cursor.execute(
+                                "INSERT INTO course_faculty (course_id, user_id, assigned_at, assigned_by) VALUES (?, ?, ?, ?)",
+                                (course_id, user_id, datetime.now().isoformat(timespec="seconds"), actor_user_id),
+                            )
+                            counts["faculty_assignments_created"] += 1
+
+        conn.commit()
+        finished = datetime.now().isoformat(timespec="seconds")
+        cursor.execute(
+            "UPDATE integration_sync_runs SET status = 'completed', finished_at = ?, users_created = ?, users_updated = ?, courses_created = ?, courses_updated = ?, sections_created = ?, enrollments_created = ?, faculty_assignments_created = ?, message = ? WHERE id = ?",
+            (finished, counts["users_created"], counts["users_updated"], counts["courses_created"], counts["courses_updated"], counts["sections_created"], counts["enrollments_created"], counts["faculty_assignments_created"], json.dumps(counts), run_id),
+        )
+        conn.commit()
+        write_audit_log("oneroster_sync_completed", actor_user_id, st.session_state.get("user_role", "university_admin"), None, json.dumps(counts))
+        return counts
+    except Exception as exc:
+        conn.rollback()
+        finished = datetime.now().isoformat(timespec="seconds")
+        try:
+            cursor.execute("UPDATE integration_sync_runs SET status = 'failed', finished_at = ?, message = ? WHERE id = ?", (finished, str(exc)[:2000], run_id))
+            conn.commit()
+        except Exception:
+            pass
+        raise
+
+
+def _csv_bytes(rows, fieldnames):
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8")
+
+
+def build_oneroster_export_zip(institution_id):
+    """Export the StudySphere institutional roster in interoperable OneRoster-style CSV files."""
+    users = cursor.execute(
+        "SELECT auth_id, name, email, role, department FROM users WHERE institution_id = ? ORDER BY name",
+        (str(institution_id),),
+    ).fetchall()
+    courses = cursor.execute(
+        "SELECT id, name, code, description FROM institution_courses WHERE institution_id = ? AND active = 1 ORDER BY name",
+        (str(institution_id),),
+    ).fetchall()
+    sections = cursor.execute(
+        "SELECT s.id, s.name, s.section_code, s.term, s.room, s.schedule, s.capacity, c.id, c.name, c.code FROM course_sections s JOIN institution_courses c ON c.id = s.course_id WHERE s.institution_id = ? AND s.active = 1 ORDER BY c.name, s.name",
+        (str(institution_id),),
+    ).fetchall()
+    enrollments = cursor.execute(
+        "SELECT se.section_id, se.user_id, se.role, se.status FROM section_enrollments se JOIN course_sections s ON s.id = se.section_id WHERE s.institution_id = ? ORDER BY se.section_id, se.user_id",
+        (str(institution_id),),
+    ).fetchall()
+
+    user_external = {}
+    course_external = {}
+    section_external = {}
+    for r in users:
+        mapping = _get_external_mapping(institution_id, "oneroster", "user", r[0])
+        user_external[r[0]] = mapping[0] if mapping else r[0]
+    for r in courses:
+        mapping = _get_external_mapping(institution_id, "oneroster", "course", r[0])
+        course_external[r[0]] = mapping[0] if mapping else r[0]
+    for r in sections:
+        mapping = _get_external_mapping(institution_id, "oneroster", "class", r[0])
+        section_external[r[0]] = mapping[0] if mapping else r[0]
+
+    user_rows = [{"sourcedId": user_external[r[0]], "status": "active", "enabledUser": "true", "role": r[3] or "student", "username": r[2] or r[0], "givenName": (r[1] or "").split(" ")[0], "familyName": " ".join((r[1] or "").split(" ")[1:]), "email": r[2] or ""} for r in users]
+    course_rows = [{"sourcedId": course_external[r[0]], "status": "active", "title": r[1] or "", "courseCode": r[2] or "", "description": r[3] or ""} for r in courses]
+    class_rows = [{"sourcedId": section_external[r[0]], "status": "active", "title": r[1] or "", "classCode": r[2] or "", "courseSourcedId": course_external.get(r[7], r[7]), "termSourcedId": r[3] or "", "room": r[4] or "", "schedule": r[5] or "", "capacity": r[6] or 0} for r in sections]
+    enrollment_rows = [{"sourcedId": f"{section_external.get(r[0], r[0])}:{user_external.get(r[1], r[1])}:{r[2]}", "status": r[3] or "active", "classSourcedId": section_external.get(r[0], r[0]), "userSourcedId": user_external.get(r[1], r[1]), "role": r[2] or "student"} for r in enrollments]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("users.csv", _csv_bytes(user_rows, ["sourcedId", "status", "enabledUser", "role", "username", "givenName", "familyName", "email"]))
+        zf.writestr("courses.csv", _csv_bytes(course_rows, ["sourcedId", "status", "title", "courseCode", "description"]))
+        zf.writestr("classes.csv", _csv_bytes(class_rows, ["sourcedId", "status", "title", "classCode", "courseSourcedId", "termSourcedId", "room", "schedule", "capacity"]))
+        zf.writestr("enrollments.csv", _csv_bytes(enrollment_rows, ["sourcedId", "status", "classSourcedId", "userSourcedId", "role"]))
+    return buffer.getvalue()
+
+
+def lti_registration_rows(institution_id):
+    return cursor.execute(
+        "SELECT id, platform_name, issuer, client_id, deployment_id, authorization_endpoint, token_endpoint, jwks_url, active, updated_at FROM lti_registrations WHERE institution_id = ? ORDER BY platform_name",
+        (str(institution_id),),
+    ).fetchall()
+
+
+def save_lti_registration(user_id, institution_id, platform_name, issuer, client_id, deployment_id, authorization_endpoint, token_endpoint, jwks_url, active=True):
+    if not has_permission("manage_university") and not has_permission("manage_users"):
+        raise PermissionError("Only University Admin or Creator can manage LTI registrations.")
+    platform_name = clean_name(platform_name)
+    issuer = str(issuer or "").strip()
+    client_id = str(client_id or "").strip()
+    if not platform_name or not issuer or not client_id:
+        raise ValueError("Platform name, issuer, and client ID are required.")
+    now = datetime.now().isoformat(timespec="seconds")
+    existing = cursor.execute(
+        "SELECT id FROM lti_registrations WHERE institution_id = ? AND issuer = ? AND client_id = ?",
+        (str(institution_id), issuer, client_id),
+    ).fetchone()
+    values = (platform_name, issuer, client_id, str(deployment_id or "").strip(), str(authorization_endpoint or "").strip(), str(token_endpoint or "").strip(), str(jwks_url or "").strip(), 1 if active else 0, now)
+    if existing:
+        registration_id = str(existing[0])
+        cursor.execute(
+            "UPDATE lti_registrations SET platform_name = ?, deployment_id = ?, authorization_endpoint = ?, token_endpoint = ?, jwks_url = ?, active = ?, updated_at = ? WHERE id = ? AND institution_id = ?",
+            (
+                platform_name,
+                str(deployment_id or "").strip(),
+                str(authorization_endpoint or "").strip(),
+                str(token_endpoint or "").strip(),
+                str(jwks_url or "").strip(),
+                1 if active else 0,
+                now,
+                registration_id,
+                str(institution_id),
+            ),
+        )
+    else:
+        registration_id = f"lti-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO lti_registrations (id, institution_id, platform_name, issuer, client_id, deployment_id, authorization_endpoint, token_endpoint, jwks_url, active, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (registration_id, str(institution_id)) + values[:8] + (str(user_id), now, now),
+        )
+    conn.commit()
+    write_audit_log("lti_registration_saved", user_id, st.session_state.get("user_role", "university_admin"), None, f"LTI platform={platform_name}; issuer={issuer}")
+    return registration_id
+
+
+def build_lti_tool_configuration(app_base_url, deployment_id=""):
+    base = str(app_base_url or "").strip().rstrip("/")
+    return {
+        "protocol": "LTI 1.3 / LTI Advantage",
+        "launch_url": base + "/lti/launch" if base else "/lti/launch",
+        "login_initiation_url": base + "/lti/login" if base else "/lti/login",
+        "jwks_url": base + "/lti/jwks" if base else "/lti/jwks",
+        "deployment_id": str(deployment_id or ""),
+        "notes": "Configure these URLs in the LMS after deploying the StudySphere LTI gateway. The Streamlit UI remains the student/faculty front end; the gateway handles LTI protocol messages.",
+    }
+
+
+def recent_integration_syncs(institution_id, limit=20):
+    return cursor.execute(
+        "SELECT r.started_at, r.finished_at, r.status, c.integration_type, c.name, r.users_created, r.users_updated, r.courses_created, r.courses_updated, r.sections_created, r.enrollments_created, r.faculty_assignments_created, r.message FROM integration_sync_runs r JOIN integration_configs c ON c.id = r.integration_id WHERE c.institution_id = ? ORDER BY r.started_at DESC LIMIT ?",
+        (str(institution_id), int(limit)),
+    ).fetchall()
 
 
 def storage_root_path():
@@ -3741,6 +4220,8 @@ nav_options = [
     (14, "🎓  My University"),
     (16, "🏛️  University Knowledge AI"),
 ]
+if has_permission("manage_university"):
+    nav_options.append((17, "🔗  Integration Center"))
 if has_permission("manage_users"):
     nav_options.append((11, "🔐  Creator Dashboard"))
 if has_permission("manage_faculty_courses"):
@@ -3764,6 +4245,9 @@ if st.session_state.page == 13 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 16 and not has_permission("use_ai_agent"):
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 17 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 
@@ -3807,6 +4291,9 @@ if has_permission("manage_university"):
     st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
     if st.sidebar.button("🏫 University Admin", key="university_admin_sidebar", use_container_width=True):
         st.session_state.page = 13
+        st.rerun()
+    if st.sidebar.button("🔗 Integration Center", key="integration_center_sidebar", use_container_width=True):
+        st.session_state.page = 17
         st.rerun()
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
@@ -4944,6 +5431,123 @@ elif st.session_state.page == 15 and st.session_state.user_role in {"faculty", "
                     st.info("No faculty AI generations for this course yet.")
 
             st.markdown('<div class="ai-panel"><div class="ai-badge">Strict institutional grounding</div><div class="ai-title">🔐 Faculty AI only uses the selected course knowledge base</div><div class="ai-text">The assistant receives the selected course material and course metadata. It does not receive another teacher’s courses or a student’s private documents. When the stored course material does not support a request, the AI is instructed not to fill the gap with general knowledge.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 17 and st.session_state.user_role in {"university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">🔗 Integration Center</div><div class="page-sub">Connect StudySphere to university identity, LMS and SIS workflows without exposing passwords or external credentials.</div></div>', unsafe_allow_html=True)
+
+    institution_id = DEFAULT_INSTITUTION_ID
+    db_ok, db_label = database_health()
+    integration_rows = _integration_config_rows(institution_id)
+    lti_rows = lti_registration_rows(institution_id)
+    recent_sync_rows = recent_integration_syncs(institution_id, limit=15)
+
+    i1, i2, i3, i4 = st.columns(4)
+    i1.metric("SSO", "Configured" if university_sso_configured() else "Not configured")
+    i2.metric("Integrations", len([r for r in integration_rows if r[4]]))
+    i3.metric("LTI platforms", len([r for r in lti_rows if r[8]]))
+    i4.metric("Database", db_label)
+
+    tab_sso, tab_roster, tab_lti, tab_activity = st.tabs(["🏫 University SSO", "🔄 OneRoster LMS/SIS", "🔐 LTI 1.3", "📋 Sync Activity"])
+
+    with tab_sso:
+        st.markdown('<div class="panel"><div class="panel-title">🏫 University SSO</div><div class="panel-sub">StudySphere already uses Streamlit OpenID Connect for optional university sign-in. Configure the provider in deployment secrets, then use this page for diagnostics.</div></div>', unsafe_allow_html=True)
+        if university_sso_configured():
+            st.success("University SSO configuration detected.")
+        else:
+            st.warning("University SSO is not configured yet.")
+        st.code('[auth]\nredirect_uri = "https://YOUR-APP.streamlit.app/oauth2callback"\ncookie_secret = "YOUR-LONG-RANDOM-SECRET"\n\n[auth.university]\nclient_id = "YOUR-CLIENT-ID"\nclient_secret = "YOUR-CLIENT-SECRET"\nserver_metadata_url = "https://YOUR-IDP/.well-known/openid-configuration"', language="toml")
+        st.caption("Streamlit's current authentication API uses OpenID Connect and supports providers such as Microsoft and Google. Client secrets belong in Streamlit Secrets, not in the StudySphere database.")
+        st.markdown("**Current local account mapping**")
+        sso_users = cursor.execute("SELECT role, COUNT(*) FROM users WHERE institution_id = ? GROUP BY role ORDER BY role", (institution_id,)).fetchall()
+        st.dataframe([{"StudySphere role": role_label(r[0]), "Accounts": r[1]} for r in sso_users], use_container_width=True, hide_index=True)
+
+    with tab_roster:
+        st.markdown('<div class="panel"><div class="panel-title">🔄 OneRoster 1.2 CSV sync</div><div class="panel-sub">Import institution roster data from a standard OneRoster-style CSV bundle, or export StudySphere roster data for another education system.</div></div>', unsafe_allow_html=True)
+        roster_files = st.file_uploader("Upload OneRoster CSV files", type=["csv"], accept_multiple_files=True, key="oneroster_uploads")
+        if roster_files:
+            st.caption("Detected: " + ", ".join(f.name for f in roster_files))
+        sync_button = st.button("⬆️ Import OneRoster data", key="oneroster_import_button", use_container_width=True)
+        if sync_button:
+            try:
+                with st.spinner("🔄 Importing OneRoster data..."):
+                    counts = import_oneroster_csv_bundle(roster_files, institution_id, AUTH_ID)
+                st.success("OneRoster synchronization completed.")
+                st.json(counts)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"OneRoster import failed: {exc}")
+
+        export_bytes = build_oneroster_export_zip(institution_id)
+        st.download_button(
+            "⬇️ Export StudySphere OneRoster bundle",
+            data=export_bytes,
+            file_name="studysphere_oneroster_export.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="oneroster_export_button",
+        )
+        st.caption("The import keeps existing records and uses external sourcedId mappings to avoid duplicate users, courses and sections on later syncs.")
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">How the roster flow works</div><div class="panel-sub">Standardized exchange for people, courses, classes/sections and enrollments.</div></div>', unsafe_allow_html=True)
+        st.markdown("**SIS/LMS → OneRoster CSV → StudySphere**  |  **StudySphere → OneRoster CSV → SIS/LMS**")
+        st.caption("OneRoster 1.2 is designed for exchange of people, courses, classes/rosters and related data between educational systems.")
+
+    with tab_lti:
+        st.markdown('<div class="panel"><div class="panel-title">🔐 LTI 1.3 / LTI Advantage</div><div class="panel-sub">Store an LMS platform registration now; the protocol gateway is configured separately at deployment time so Streamlit remains the student/faculty web front end.</div></div>', unsafe_allow_html=True)
+        with st.form("lti_registration_form"):
+            lti_platform_name = st.text_input("Platform name", placeholder="e.g. Moodle, Canvas, Blackboard")
+            lti_issuer = st.text_input("Issuer (iss)", placeholder="https://lms.example.edu")
+            lti_client_id = st.text_input("Client ID")
+            lti_deployment_id = st.text_input("Deployment ID")
+            lti_auth_endpoint = st.text_input("Authorization endpoint")
+            lti_token_endpoint = st.text_input("Token endpoint")
+            lti_jwks_url = st.text_input("JWKS URL")
+            lti_active = st.checkbox("Active", value=True)
+            save_lti = st.form_submit_button("💾 Save LTI registration", use_container_width=True)
+        if save_lti:
+            try:
+                save_lti_registration(AUTH_ID, institution_id, lti_platform_name, lti_issuer, lti_client_id, lti_deployment_id, lti_auth_endpoint, lti_token_endpoint, lti_jwks_url, active=lti_active)
+                st.success("LTI platform registration saved.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not save LTI registration: {exc}")
+
+        st.markdown("**Registered LMS platforms**")
+        if lti_rows:
+            st.dataframe([
+                {"Platform": r[1], "Issuer": r[2], "Client ID": r[3], "Deployment": r[4] or "—", "Active": "Yes" if r[8] else "No", "Updated": r[9]}
+                for r in lti_rows
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("No LTI platform registration has been saved yet.")
+
+        lti_base_url = st.text_input("StudySphere public base URL", placeholder="https://studysphere.youruniversity.edu", key="lti_base_url")
+        lti_config_json = build_lti_tool_configuration(lti_base_url, lti_deployment_id)
+        st.download_button(
+            "⬇️ Download LTI tool configuration JSON",
+            data=json.dumps(lti_config_json, indent=2).encode("utf-8"),
+            file_name="studysphere_lti_tool_configuration.json",
+            mime="application/json",
+            use_container_width=True,
+            key="lti_config_download",
+        )
+        st.info("The configuration file prepares the tool URLs for a deployment. A production LTI 1.3 launch gateway must be hosted at those endpoints; this Streamlit UI does not pretend to be the LMS protocol gateway itself.")
+
+    with tab_activity:
+        st.markdown('<div class="panel"><div class="panel-title">📋 Integration sync activity</div><div class="panel-sub">Recent inbound roster synchronization results and counts.</div></div>', unsafe_allow_html=True)
+        if recent_sync_rows:
+            st.dataframe([
+                {
+                    "Started": r[0], "Finished": r[1] or "—", "Status": r[2], "Integration": f"{r[3]} • {r[4]}",
+                    "Users +": r[5], "Users ↻": r[6], "Courses +": r[7], "Courses ↻": r[8],
+                    "Sections +": r[9], "Enrollments +": r[10], "Faculty links +": r[11], "Message": r[12] or "",
+                }
+                for r in recent_sync_rows
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("No integration synchronization has been run yet.")
+
+        st.markdown('<div class="ai-panel"><div class="ai-badge">Step 9 • Institutional Integrations</div><div class="ai-title">🔗 StudySphere is ready to exchange university identity and roster data</div><div class="ai-text">University SSO diagnostics, OneRoster 1.2 CSV import/export, external-ID mappings, LTI platform registrations, and synchronization history are now part of the institutional administration layer.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
