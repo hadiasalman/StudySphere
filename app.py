@@ -219,6 +219,76 @@ def write_audit_log(action, actor_user_id=None, actor_role=None, target_user_id=
 
 DEFAULT_INSTITUTION_ID = ensure_default_institution()
 
+
+# ============================================================
+# UNIVERSITY EDITION: ACADEMIC STRUCTURE
+# ============================================================
+cursor.execute("CREATE TABLE IF NOT EXISTS departments (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, name TEXT NOT NULL, code TEXT, created_at TEXT NOT NULL, UNIQUE(institution_id, name))")
+cursor.execute("CREATE TABLE IF NOT EXISTS institution_courses (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, department_id TEXT, name TEXT NOT NULL, code TEXT, description TEXT, semester TEXT, credits INTEGER DEFAULT 3, created_by TEXT, created_at TEXT NOT NULL, active INTEGER DEFAULT 1)")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_faculty (course_id TEXT NOT NULL, user_id TEXT NOT NULL, assigned_at TEXT NOT NULL, assigned_by TEXT, PRIMARY KEY(course_id, user_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_enrollments (course_id TEXT NOT NULL, user_id TEXT NOT NULL, enrolled_at TEXT NOT NULL, enrolled_by TEXT, PRIMARY KEY(course_id, user_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_assignments (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, due_date TEXT, created_by TEXT, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_materials (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, uploader_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, char_count INTEGER DEFAULT 0, uploaded_at TEXT NOT NULL)")
+conn.commit()
+
+
+def role_label(value):
+    return {
+        "creator": "Creator",
+        "university_admin": "University Admin",
+        "faculty": "Faculty",
+        "student": "Student",
+    }.get(str(value or "student").lower(), "Student")
+
+
+def user_institution_id(user_id):
+    row = cursor.execute("SELECT institution_id FROM users WHERE auth_id = ?", (str(user_id),)).fetchone()
+    return str(row[0]) if row and row[0] else DEFAULT_INSTITUTION_ID
+
+
+def faculty_courses(user_id):
+    return cursor.execute(
+        "SELECT c.id, c.name, c.code, c.semester, c.credits, d.name, d.code "
+        "FROM institution_courses c "
+        "LEFT JOIN departments d ON c.department_id = d.id "
+        "JOIN course_faculty cf ON cf.course_id = c.id "
+        "WHERE cf.user_id = ? AND c.institution_id = ? AND c.active = 1 "
+        "ORDER BY c.name",
+        (str(user_id), user_institution_id(user_id)),
+    ).fetchall()
+
+
+def institution_courses_for_admin(institution_id):
+    return cursor.execute(
+        "SELECT c.id, c.name, c.code, d.name, c.semester, c.credits, c.active "
+        "FROM institution_courses c LEFT JOIN departments d ON c.department_id = d.id "
+        "WHERE c.institution_id = ? ORDER BY c.name",
+        (str(institution_id),),
+    ).fetchall()
+
+
+def course_name_map(course_rows):
+    return {f"{row[1]}" + (f" ({row[2]})" if row[2] else ""): row for row in course_rows}
+
+
+def course_material_text_from_upload(file_name, file_bytes):
+    name = str(file_name or "")
+    lower_name = name.lower()
+    if lower_name.endswith(".pptx"):
+        if Presentation is None:
+            raise ValueError("PowerPoint support is not installed.")
+        presentation = Presentation(io.BytesIO(file_bytes))
+        slide_text = []
+        for index, slide in enumerate(presentation.slides, start=1):
+            texts = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and str(shape.text).strip():
+                    texts.append(str(shape.text).strip())
+            if texts:
+                slide_text.append(f"Slide {index}\n" + "\n".join(texts))
+        return "\n\n".join(slide_text).strip()
+    return _document_plain_text_from_bytes(file_bytes, name).strip()
+
 # ============================================================
 # CREATOR / ADMIN CONFIGURATION
 # ============================================================
@@ -2580,10 +2650,20 @@ nav_options = [
 ]
 if st.session_state.is_admin:
     nav_options.append((11, "🔐  Creator Dashboard"))
+if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+    nav_options.append((12, "👨‍🏫  Faculty Center"))
+if st.session_state.user_role in {"university_admin", "creator"}:
+    nav_options.append((13, "🏫  University Admin"))
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
 st.session_state.page = dict((label, page_id) for page_id, label in nav_options)[selected_label]
 if st.session_state.page == 11 and not st.session_state.is_admin:
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 12 and st.session_state.user_role not in {"faculty", "university_admin", "creator"}:
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 13 and st.session_state.user_role not in {"university_admin", "creator"}:
     st.session_state.page = 1
     st.rerun()
 
@@ -2608,6 +2688,16 @@ if st.session_state.is_admin:
     st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
     if st.sidebar.button("🔐 Creator Dashboard", key="creator_dashboard_sidebar", use_container_width=True):
         st.session_state.page = 11
+        st.rerun()
+if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+    st.sidebar.markdown('<div class="sidebar-label">Teaching</div>', unsafe_allow_html=True)
+    if st.sidebar.button("👨‍🏫 Faculty Center", key="faculty_center_sidebar", use_container_width=True):
+        st.session_state.page = 12
+        st.rerun()
+if st.session_state.user_role in {"university_admin", "creator"}:
+    st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
+    if st.sidebar.button("🏫 University Admin", key="university_admin_sidebar", use_container_width=True):
+        st.session_state.page = 13
         st.rerun()
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
@@ -3245,6 +3335,267 @@ elif st.session_state.page == 9:
             st.rerun()
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">PPT • AI assisted</div><div class="ai-title">From prompt to presentation</div><div class="ai-text">StudySphere can also use relevant passages from your uploaded study documents when building the deck, so the presentation can stay grounded in your own notes when the topic matches your knowledge base.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">👨‍🏫 Faculty Center</div><div class="page-sub">Manage assigned courses, course material, assignments and enrolled students from one teaching workspace.</div></div>', unsafe_allow_html=True)
+
+    faculty_course_rows = faculty_courses(AUTH_ID)
+    if st.session_state.user_role in {"university_admin", "creator"}:
+        admin_visible_courses = institution_courses_for_admin(DEFAULT_INSTITUTION_ID)
+        assigned_ids = {row[0] for row in cursor.execute("SELECT course_id FROM course_faculty WHERE user_id = ?", (AUTH_ID,)).fetchall()}
+        if not faculty_course_rows and st.session_state.user_role == "creator":
+            faculty_course_rows = [row for row in admin_visible_courses if row[0] in assigned_ids]
+
+    if not faculty_course_rows:
+        st.markdown('<div class="panel"><div class="panel-title">No assigned courses yet</div><div class="panel-sub">A University Admin or Creator needs to assign a course to this faculty account from University Admin → Course & faculty management.</div></div>', unsafe_allow_html=True)
+    else:
+        course_map = course_name_map(faculty_course_rows)
+        selected_course_label = st.selectbox("Teaching course", list(course_map.keys()), key="faculty_center_course_selector")
+        selected_course = course_map[selected_course_label]
+        selected_course_id = selected_course[0]
+
+        roster_count = int(cursor.execute("SELECT COUNT(*) FROM course_enrollments WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
+        material_count = int(cursor.execute("SELECT COUNT(*) FROM course_materials WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
+        course_assignment_count = int(cursor.execute("SELECT COUNT(*) FROM course_assignments WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Enrolled students", roster_count)
+        k2.metric("Course materials", material_count)
+        k3.metric("Course assignments", course_assignment_count)
+        k4.metric("Credits", selected_course[4] or 0)
+
+        st.markdown('<div class="panel"><div class="panel-title">📘 Course overview</div><div class="panel-sub">This information belongs to the university course, not to an individual student workspace.</div></div>', unsafe_allow_html=True)
+        overview_left, overview_right = st.columns(2)
+        overview_left.markdown(f"**Course:** {selected_course[1]}<br>**Code:** {selected_course[2] or '—'}<br>**Department:** {selected_course[5] or '—'}", unsafe_allow_html=True)
+        overview_right.markdown(f"**Semester:** {selected_course[3] or '—'}<br>**Credits:** {selected_course[4] or '—'}<br>**Description:** {cursor.execute('SELECT description FROM institution_courses WHERE id = ?', (selected_course_id,)).fetchone()[0] or '—'}", unsafe_allow_html=True)
+
+        upload_col, assignment_col = st.columns(2)
+        with upload_col:
+            st.markdown('<div class="panel"><div class="panel-title">📚 Upload course material</div><div class="panel-sub">Materials become part of the course knowledge base for future university AI features.</div></div>', unsafe_allow_html=True)
+            material_file = st.file_uploader("Course file", type=["pdf", "docx", "pptx", "txt", "md", "markdown"], key=f"faculty_material_{selected_course_id}")
+            if material_file:
+                if material_file.size > 10 * 1024 * 1024:
+                    st.error("Please keep course files under 10 MB.")
+                upload_material = st.button("⬆️ Save course material", key=f"save_material_{selected_course_id}", use_container_width=True)
+                if upload_material and material_file.size <= 10 * 1024 * 1024:
+                    try:
+                        material_text = course_material_text_from_upload(material_file.name, material_file.getvalue())
+                        if not material_text:
+                            st.error("No readable text was found in this file.")
+                        else:
+                            file_hash = hashlib.sha256(material_file.getvalue()).hexdigest()
+                            duplicate = cursor.execute("SELECT id FROM course_materials WHERE course_id = ? AND name = ?", (selected_course_id, material_file.name)).fetchone()
+                            if duplicate:
+                                st.warning("A course material with this filename already exists.")
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO course_materials (id, course_id, uploader_id, name, file_type, content_text, char_count, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (f"material-{uuid.uuid4().hex}", selected_course_id, AUTH_ID, material_file.name, material_file.name.rsplit('.', 1)[-1].lower() if '.' in material_file.name else 'file', material_text, len(material_text), datetime.now().isoformat(timespec='seconds')),
+                                )
+                                conn.commit()
+                                write_audit_log("course_material_uploaded", AUTH_ID, st.session_state.user_role, None, f"Uploaded {material_file.name} to course {selected_course[1]}; sha256={file_hash}")
+                                st.success("Course material saved.")
+                                st.rerun()
+                    except Exception as exc:
+                        st.error(f"Could not process the course file: {type(exc).__name__}: {exc}")
+
+        with assignment_col:
+            st.markdown('<div class="panel"><div class="panel-title">📝 Create course assignment</div><div class="panel-sub">Create an assignment at the course level so enrolled students can receive the same academic task.</div></div>', unsafe_allow_html=True)
+            course_assignment_title = st.text_input("Assignment title", key=f"faculty_assignment_title_{selected_course_id}")
+            course_assignment_due = st.date_input("Due date", key=f"faculty_assignment_due_{selected_course_id}")
+            course_assignment_description = st.text_area("Description", key=f"faculty_assignment_description_{selected_course_id}")
+            create_course_assignment = st.button("➕ Publish assignment", key=f"publish_course_assignment_{selected_course_id}", use_container_width=True)
+            if create_course_assignment:
+                if not course_assignment_title.strip():
+                    st.error("Enter an assignment title.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO course_assignments (id, course_id, title, description, due_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (f"course-assignment-{uuid.uuid4().hex}", selected_course_id, course_assignment_title.strip(), course_assignment_description.strip(), str(course_assignment_due), AUTH_ID, datetime.now().isoformat(timespec='seconds')),
+                    )
+                    conn.commit()
+                    write_audit_log("course_assignment_created", AUTH_ID, st.session_state.user_role, None, f"Created assignment '{course_assignment_title.strip()}' for course {selected_course[1]}")
+                    st.success("Course assignment published.")
+                    st.rerun()
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📑 Current course assignments</div><div class="panel-sub">Assignments created for this university course.</div></div>', unsafe_allow_html=True)
+        course_assignments = cursor.execute("SELECT title, due_date, description, created_at FROM course_assignments WHERE course_id = ? ORDER BY due_date", (selected_course_id,)).fetchall()
+        if course_assignments:
+            st.dataframe([{"Assignment": r[0], "Due date": r[1], "Description": r[2] or "", "Created": r[3]} for r in course_assignments], use_container_width=True, hide_index=True)
+        else:
+            st.info("No course-level assignments have been published yet.")
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📚 Course materials</div><div class="panel-sub">Uploaded teaching material stored for this course.</div></div>', unsafe_allow_html=True)
+        course_materials = cursor.execute("SELECT name, file_type, char_count, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC", (selected_course_id,)).fetchall()
+        if course_materials:
+            st.dataframe([{"File": r[0], "Type": r[1].upper(), "Characters": r[2], "Uploaded": r[3]} for r in course_materials], use_container_width=True, hide_index=True)
+        else:
+            st.info("No course material has been uploaded yet.")
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👥 Enrolled students</div><div class="panel-sub">Only students enrolled in this course are listed.</div></div>', unsafe_allow_html=True)
+        roster = cursor.execute(
+            "SELECT u.name, u.email, u.degree, u.semester, ce.enrolled_at FROM course_enrollments ce JOIN users u ON u.auth_id = ce.user_id WHERE ce.course_id = ? ORDER BY u.name",
+            (selected_course_id,),
+        ).fetchall()
+        if roster:
+            st.dataframe([{"Student": r[0], "Email": r[1], "Program": r[2] or "—", "Semester": r[3] or "—", "Enrolled": r[4]} for r in roster], use_container_width=True, hide_index=True)
+        else:
+            st.info("No students are enrolled in this course yet. A University Admin can enroll students from the University Admin page.")
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">👨‍🏫 Faculty workspace is ready</div><div class="ai-text">This step creates the institutional course layer. Faculty can manage course material and course-level assignments without mixing them with a student’s personal records. The next AI layer can safely use only material the institution has authorized for the course.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
+
+    institution_id = DEFAULT_INSTITUTION_ID
+    total_institution_users = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND password_hash IS NOT NULL", (institution_id,)).fetchone()[0] or 0)
+    total_students = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student'", (institution_id,)).fetchone()[0] or 0)
+    total_faculty = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'faculty'", (institution_id,)).fetchone()[0] or 0)
+    total_admins = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'university_admin'", (institution_id,)).fetchone()[0] or 0)
+    total_departments = int(cursor.execute("SELECT COUNT(*) FROM departments WHERE institution_id = ?", (institution_id,)).fetchone()[0] or 0)
+    total_courses = int(cursor.execute("SELECT COUNT(*) FROM institution_courses WHERE institution_id = ? AND active = 1", (institution_id,)).fetchone()[0] or 0)
+    total_enrollments = int(cursor.execute("SELECT COUNT(*) FROM course_enrollments ce JOIN institution_courses c ON c.id = ce.course_id WHERE c.institution_id = ?", (institution_id,)).fetchone()[0] or 0)
+
+    a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
+    a1.metric("Users", total_institution_users)
+    a2.metric("Students", total_students)
+    a3.metric("Faculty", total_faculty)
+    a4.metric("Admins", total_admins)
+    a5.metric("Departments", total_departments)
+    a6.metric("Courses", total_courses)
+    a7.metric("Enrollments", total_enrollments)
+
+    st.markdown('<div class="panel"><div class="panel-title">🏛️ Institution</div><div class="panel-sub">Current institution identity and deployment scope.</div></div>', unsafe_allow_html=True)
+    inst_row = cursor.execute("SELECT name, code FROM institutions WHERE id = ?", (institution_id,)).fetchone()
+    st.write(f"**{inst_row[0] if inst_row else 'StudySphere University'}**  •  `{inst_row[1] if inst_row and inst_row[1] else 'SSU'}`")
+    st.caption("This admin workspace is currently scoped to the configured StudySphere institution. Multi-campus support can be added after the core university workflow is stable.")
+
+    dep_col, course_col = st.columns(2)
+    with dep_col:
+        st.markdown('<div class="panel"><div class="panel-title">🏢 Departments</div><div class="panel-sub">Create the academic departments used by your university.</div></div>', unsafe_allow_html=True)
+        department_name_input = st.text_input("Department name", key="admin_department_name")
+        department_code_input = st.text_input("Department code", key="admin_department_code")
+        add_department = st.button("➕ Add department", key="admin_add_department", use_container_width=True)
+        if add_department:
+            if not department_name_input.strip():
+                st.error("Enter a department name.")
+            else:
+                existing_department = cursor.execute("SELECT id FROM departments WHERE institution_id = ? AND lower(name) = lower(?)", (institution_id, department_name_input.strip())).fetchone()
+                if existing_department:
+                    st.warning("That department already exists.")
+                else:
+                    cursor.execute("INSERT INTO departments (id, institution_id, name, code, created_at) VALUES (?, ?, ?, ?, ?)", (f"dept-{uuid.uuid4().hex}", institution_id, department_name_input.strip(), department_code_input.strip(), datetime.now().isoformat(timespec='seconds')))
+                    conn.commit()
+                    write_audit_log("department_created", AUTH_ID, st.session_state.user_role, None, f"Created department {department_name_input.strip()}")
+                    st.success("Department created.")
+                    st.rerun()
+
+    with course_col:
+        st.markdown('<div class="panel"><div class="panel-title">📘 Courses</div><div class="panel-sub">Create institution-owned courses before assigning teaching staff.</div></div>', unsafe_allow_html=True)
+        department_rows = cursor.execute("SELECT id, name, code FROM departments WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
+        department_labels = [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in department_rows]
+        department_choice = st.selectbox("Department", ["No department"] + department_labels, key="admin_course_department")
+        chosen_department_id = None
+        if department_choice != "No department" and department_rows:
+            chosen_department_id = department_rows[department_labels.index(department_choice)][0]
+        course_name_input = st.text_input("Course name", key="admin_course_name")
+        course_code_input = st.text_input("Course code", key="admin_course_code")
+        course_semester_input = st.text_input("Semester", placeholder="e.g. 2nd Semester", key="admin_course_semester")
+        course_credits_input = st.number_input("Credits", min_value=1, max_value=12, value=3, step=1, key="admin_course_credits")
+        course_description_input = st.text_area("Course description", key="admin_course_description")
+        add_course = st.button("➕ Create course", key="admin_add_course", use_container_width=True)
+        if add_course:
+            if not course_name_input.strip():
+                st.error("Enter a course name.")
+            else:
+                duplicate_course = cursor.execute("SELECT id FROM institution_courses WHERE institution_id = ? AND lower(name) = lower(?) AND lower(COALESCE(code, '')) = lower(?)", (institution_id, course_name_input.strip(), course_code_input.strip())).fetchone()
+                if duplicate_course:
+                    st.warning("A course with the same name and code already exists.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO institution_courses (id, institution_id, department_id, name, code, description, semester, credits, created_by, created_at, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                        (f"course-{uuid.uuid4().hex}", institution_id, chosen_department_id, course_name_input.strip(), course_code_input.strip(), course_description_input.strip(), course_semester_input.strip(), int(course_credits_input), AUTH_ID, datetime.now().isoformat(timespec='seconds')),
+                    )
+                    conn.commit()
+                    write_audit_log("course_created", AUTH_ID, st.session_state.user_role, None, f"Created course {course_name_input.strip()} ({course_code_input.strip()})")
+                    st.success("Course created.")
+                    st.rerun()
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📋 Department directory</div><div class="panel-sub">Departments currently configured for this institution.</div></div>', unsafe_allow_html=True)
+    department_directory = cursor.execute("SELECT d.name, d.code, COUNT(c.id) FROM departments d LEFT JOIN institution_courses c ON c.department_id = d.id WHERE d.institution_id = ? GROUP BY d.id ORDER BY d.name", (institution_id,)).fetchall()
+    if department_directory:
+        st.dataframe([{"Department": r[0], "Code": r[1] or "—", "Courses": r[2]} for r in department_directory], use_container_width=True, hide_index=True)
+    else:
+        st.info("No departments created yet.")
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👥 Course & faculty management</div><div class="panel-sub">Assign one or more faculty members to a course.</div></div>', unsafe_allow_html=True)
+    admin_course_rows = institution_courses_for_admin(institution_id)
+    faculty_rows = cursor.execute("SELECT auth_id, name, email, department FROM users WHERE institution_id = ? AND role = 'faculty' ORDER BY name", (institution_id,)).fetchall()
+    if admin_course_rows and faculty_rows:
+        admin_course_map = {f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in admin_course_rows}
+        admin_course_choice = st.selectbox("Course", list(admin_course_map.keys()), key="admin_faculty_course")
+        admin_course_selected = admin_course_map[admin_course_choice]
+        faculty_map = {f"{r[1]} • {r[2]}": r for r in faculty_rows}
+        selected_faculty_label = st.selectbox("Faculty member", list(faculty_map.keys()), key="admin_faculty_user")
+        selected_faculty = faculty_map[selected_faculty_label]
+        assign_faculty_button = st.button("👨‍🏫 Assign faculty", key="assign_faculty_button", use_container_width=True)
+        if assign_faculty_button:
+            exists_assignment = cursor.execute("SELECT 1 FROM course_faculty WHERE course_id = ? AND user_id = ?", (admin_course_selected[0], selected_faculty[0])).fetchone()
+            if exists_assignment:
+                st.info("This faculty member is already assigned to the course.")
+            else:
+                cursor.execute("INSERT INTO course_faculty (course_id, user_id, assigned_at, assigned_by) VALUES (?, ?, ?, ?)", (admin_course_selected[0], selected_faculty[0], datetime.now().isoformat(timespec='seconds'), AUTH_ID))
+                conn.commit()
+                write_audit_log("faculty_assigned_to_course", AUTH_ID, st.session_state.user_role, selected_faculty[0], f"Assigned {selected_faculty[2]} to course {admin_course_selected[1]}")
+                st.success("Faculty assignment saved.")
+                st.rerun()
+        existing_faculty_for_course = cursor.execute("SELECT u.name, u.email, u.department FROM course_faculty cf JOIN users u ON u.auth_id = cf.user_id WHERE cf.course_id = ? ORDER BY u.name", (admin_course_selected[0],)).fetchall()
+        if existing_faculty_for_course:
+            st.dataframe([{"Faculty": r[0], "Email": r[1], "Department": r[2] or "—"} for r in existing_faculty_for_course], use_container_width=True, hide_index=True)
+        else:
+            st.info("No faculty assigned to this course yet.")
+    elif not admin_course_rows:
+        st.info("Create at least one course first.")
+    else:
+        st.info("Create or promote a Faculty account first, then assign faculty here.")
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🎓 Student enrollment</div><div class="panel-sub">Enroll students into institution-owned courses.</div></div>', unsafe_allow_html=True)
+    student_rows = cursor.execute("SELECT auth_id, name, email, degree, semester FROM users WHERE institution_id = ? AND role = 'student' ORDER BY name", (institution_id,)).fetchall()
+    if admin_course_rows and student_rows:
+        enrollment_course_map = {f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in admin_course_rows}
+        enrollment_course_choice = st.selectbox("Enrollment course", list(enrollment_course_map.keys()), key="admin_enrollment_course")
+        enrollment_course = enrollment_course_map[enrollment_course_choice]
+        student_map = {f"{r[1]} • {r[2]}": r for r in student_rows}
+        enrollment_student_label = st.selectbox("Student", list(student_map.keys()), key="admin_enrollment_student")
+        enrollment_student = student_map[enrollment_student_label]
+        enroll_button = st.button("🎓 Enroll student", key="admin_enroll_student", use_container_width=True)
+        if enroll_button:
+            existing_enrollment = cursor.execute("SELECT 1 FROM course_enrollments WHERE course_id = ? AND user_id = ?", (enrollment_course[0], enrollment_student[0])).fetchone()
+            if existing_enrollment:
+                st.info("This student is already enrolled in the course.")
+            else:
+                cursor.execute("INSERT INTO course_enrollments (course_id, user_id, enrolled_at, enrolled_by) VALUES (?, ?, ?, ?)", (enrollment_course[0], enrollment_student[0], datetime.now().isoformat(timespec='seconds'), AUTH_ID))
+                conn.commit()
+                write_audit_log("student_enrolled", AUTH_ID, st.session_state.user_role, enrollment_student[0], f"Enrolled {enrollment_student[2]} in course {enrollment_course[1]}")
+                st.success("Student enrolled successfully.")
+                st.rerun()
+    elif not admin_course_rows:
+        st.info("Create a course first before enrolling students.")
+    else:
+        st.info("There are no student accounts available for enrollment yet.")
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👤 University user directory</div><div class="panel-sub">Institution-scoped users and their roles.</div></div>', unsafe_allow_html=True)
+    role_filter = st.selectbox("Filter users", ["All", "Student", "Faculty", "University Admin"], key="admin_role_filter")
+    role_filter_map = {"All": None, "Student": "student", "Faculty": "faculty", "University Admin": "university_admin"}
+    filter_role = role_filter_map[role_filter]
+    if filter_role:
+        institution_user_rows = cursor.execute("SELECT name, email, role, department, degree, semester, created_at, last_login_at, last_seen_at FROM users WHERE institution_id = ? AND role = ? ORDER BY name", (institution_id, filter_role)).fetchall()
+    else:
+        institution_user_rows = cursor.execute("SELECT name, email, role, department, degree, semester, created_at, last_login_at, last_seen_at FROM users WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
+    st.dataframe([{"Name": r[0], "Email": r[1], "Role": role_label(r[2]), "Department": r[3] or "—", "Program": r[4] or "—", "Semester": r[5] or "—", "Created": r[6] or "—", "Last login": r[7] or "—", "Last seen": r[8] or "—"} for r in institution_user_rows], use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. The next step can connect these authorized course records to the student experience and grounded AI.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 11 and st.session_state.is_admin:
     st.markdown('<div class="page-banner"><div class="page-title">🔐 Creator Dashboard</div><div class="page-sub">Private creator analytics and read-only access to StudySphere user data and activity.</div></div>', unsafe_allow_html=True)
