@@ -374,6 +374,17 @@ if "last_auth_method" not in user_columns:
 if "account_status" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'active'")
 
+# Re-check the live schema after additive migrations. Some long-lived Streamlit
+# deployments can retain an older SQLite database between app versions. Keep a
+# small compatibility flag so reporting pages can still operate safely if an
+# external database restore prevented a non-destructive migration from applying.
+try:
+    _live_user_columns = {row[1] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+except Exception:
+    _live_user_columns = set(user_columns)
+
+USERS_HAS_ACCOUNT_STATUS = "account_status" in _live_user_columns
+
 backfill_now = datetime.now().isoformat(timespec="seconds")
 cursor.execute("UPDATE users SET created_at = COALESCE(created_at, ?) WHERE created_at IS NULL OR trim(created_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET last_seen_at = COALESCE(last_seen_at, created_at, ?) WHERE last_seen_at IS NULL OR trim(last_seen_at) = ''", (backfill_now,))
@@ -587,14 +598,15 @@ def step10_update_support_case(actor_user_id, case_id, status, priority, resolut
 
 def step10_student_activity_signals(institution_id, inactive_days=14):
     cutoff = _safe_iso_days_ago(inactive_days)
+    active_status_sql = " AND u.account_status = 'active'" if USERS_HAS_ACCOUNT_STATUS else ""
     rows = cursor.execute(
-        "SELECT u.auth_id, u.name, u.email, u.department, u.last_seen_at, COUNT(DISTINCT ce.course_id) "
-        "FROM users u JOIN course_enrollments ce ON ce.user_id = u.auth_id "
-        "JOIN institution_courses c ON c.id = ce.course_id "
-        "WHERE u.institution_id = ? AND u.role = 'student' AND u.account_status = 'active' "
-        "AND c.active = 1 AND (u.last_seen_at IS NULL OR trim(u.last_seen_at) = '' OR u.last_seen_at < ?) "
-        "GROUP BY u.auth_id, u.name, u.email, u.department, u.last_seen_at "
-        "ORDER BY u.last_seen_at ASC, u.name",
+        f"SELECT u.auth_id, u.name, u.email, u.department, u.last_seen_at, COUNT(DISTINCT ce.course_id) "
+        f"FROM users u JOIN course_enrollments ce ON ce.user_id = u.auth_id "
+        f"JOIN institution_courses c ON c.id = ce.course_id "
+        f"WHERE u.institution_id = ? AND u.role = 'student'{active_status_sql} "
+        f"AND c.active = 1 AND (u.last_seen_at IS NULL OR trim(u.last_seen_at) = '' OR u.last_seen_at < ?) "
+        f"GROUP BY u.auth_id, u.name, u.email, u.department, u.last_seen_at "
+        f"ORDER BY u.last_seen_at ASC, u.name",
         (str(institution_id), cutoff),
     ).fetchall()
     return rows
@@ -632,8 +644,9 @@ def step10_course_quality_signals(institution_id, department_id=None, term=None)
 
 
 def step10_user_role_counts(institution_id):
+    active_status_sql = " AND account_status = 'active'" if USERS_HAS_ACCOUNT_STATUS else ""
     rows = cursor.execute(
-        "SELECT role, COUNT(*) FROM users WHERE institution_id = ? AND account_status = 'active' GROUP BY role ORDER BY role",
+        f"SELECT role, COUNT(*) FROM users WHERE institution_id = ?{active_status_sql} GROUP BY role ORDER BY role",
         (str(institution_id),),
     ).fetchall()
     label_map = {"creator": "Creator", "university_admin": "University Admin", "faculty": "Faculty", "student": "Student", "academic_advisor": "Academic Advisor"}
@@ -5884,6 +5897,9 @@ elif st.session_state.page == 17 and st.session_state.user_role in {"university_
 elif st.session_state.page == 18 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">📈 Institutional Analytics</div><div class="page-sub">University-wide reporting and human-review academic support signals built from authorized StudySphere data.</div></div>', unsafe_allow_html=True)
 
+    if not USERS_HAS_ACCOUNT_STATUS:
+        st.warning("Legacy database detected: the optional account-status column is unavailable, so analytics will continue using institution and role data without filtering by account status.")
+
     institution_id = DEFAULT_INSTITUTION_ID
     dept_rows = cursor.execute("SELECT id, name, code FROM departments WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
     dept_map = {"All departments": None}
@@ -5903,10 +5919,11 @@ elif st.session_state.page == 18 and st.session_state.user_role in {"university_
 
     role_counts = step10_user_role_counts(institution_id)
     course_rows = step10_course_scope_rows(institution_id, analytics_dept_id, analytics_term)
-    active_students = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active'").fetchone()[0] or 0)
-    active_30d = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active' AND last_seen_at >= ?", (institution_id, _safe_iso_days_ago(30))).fetchone()[0] or 0)
+    active_status_sql = " AND account_status = 'active'" if USERS_HAS_ACCOUNT_STATUS else ""
+    active_students = int(cursor.execute(f"SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student'{active_status_sql}", (institution_id,)).fetchone()[0] or 0)
+    active_30d = int(cursor.execute(f"SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'student'{active_status_sql} AND last_seen_at >= ?", (institution_id, _safe_iso_days_ago(30))).fetchone()[0] or 0)
     enrolled_students = int(cursor.execute("SELECT COUNT(DISTINCT ce.user_id) FROM course_enrollments ce JOIN institution_courses c ON c.id = ce.course_id WHERE c.institution_id = ? AND c.active = 1", (institution_id,)).fetchone()[0] or 0)
-    faculty_count = int(cursor.execute("SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'faculty' AND account_status = 'active'", (institution_id,)).fetchone()[0] or 0)
+    faculty_count = int(cursor.execute(f"SELECT COUNT(*) FROM users WHERE institution_id = ? AND role = 'faculty'{active_status_sql}", (institution_id,)).fetchone()[0] or 0)
     course_count = len(course_rows)
     section_count = int(cursor.execute("SELECT COUNT(*) FROM course_sections s JOIN institution_courses c ON c.id = s.course_id WHERE c.institution_id = ? AND c.active = 1 AND s.active = 1", (institution_id,)).fetchone()[0] or 0)
     ai_messages_30d = int(cursor.execute("SELECT COUNT(*) FROM chat_messages m JOIN users u ON u.auth_id = m.user_id WHERE u.institution_id = ? AND m.created_at >= ?", (institution_id, _safe_iso_days_ago(30))).fetchone()[0] or 0)
