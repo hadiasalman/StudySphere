@@ -248,6 +248,14 @@ cursor.execute("CREATE TABLE IF NOT EXISTS course_enrollments (course_id TEXT NO
 cursor.execute("CREATE TABLE IF NOT EXISTS course_assignments (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, due_date TEXT, created_by TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_materials (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, uploader_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, char_count INTEGER DEFAULT 0, uploaded_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, faculty_id TEXT NOT NULL, action_type TEXT NOT NULL, instructions TEXT, output_text TEXT NOT NULL, source_names TEXT, created_at TEXT NOT NULL)")
+# Step 6: structured academic management. These tables extend the existing
+# institution/course/enrollment layer without replacing any existing data.
+cursor.execute("CREATE TABLE IF NOT EXISTS academic_programs (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, department_id TEXT, name TEXT NOT NULL, code TEXT, degree_level TEXT, duration_years REAL, total_credits INTEGER DEFAULT 0, description TEXT, active INTEGER DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS academic_semesters (id TEXT PRIMARY KEY, program_id TEXT NOT NULL, semester_no INTEGER NOT NULL, name TEXT NOT NULL, academic_year TEXT, start_date TEXT, end_date TEXT, active INTEGER DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL, UNIQUE(program_id, semester_no))")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_programs (program_id TEXT NOT NULL, course_id TEXT NOT NULL, semester_id TEXT, recommended INTEGER DEFAULT 1, PRIMARY KEY(program_id, course_id, semester_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, program_id TEXT, semester_id TEXT, section_name TEXT NOT NULL, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 50, active INTEGER DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS section_faculty (section_id TEXT NOT NULL, user_id TEXT NOT NULL, assigned_at TEXT NOT NULL, assigned_by TEXT, PRIMARY KEY(section_id, user_id))")
+cursor.execute("CREATE TABLE IF NOT EXISTS section_enrollments (section_id TEXT NOT NULL, user_id TEXT NOT NULL, enrolled_at TEXT NOT NULL, enrolled_by TEXT, PRIMARY KEY(section_id, user_id))")
 conn.commit()
 
 
@@ -3265,6 +3273,7 @@ if has_permission("manage_faculty_courses"):
     nav_options.append((15, "🧠  Faculty AI"))
 if has_permission("manage_university"):
     nav_options.append((13, "🏫  University Admin"))
+    nav_options.append((16, "📚  Academic Management"))
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
 st.session_state.page = dict((label, page_id) for page_id, label in nav_options)[selected_label]
@@ -3278,6 +3287,9 @@ if st.session_state.page == 15 and not has_permission("use_faculty_ai"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 13 and not has_permission("manage_university"):
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 16 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 
@@ -3318,6 +3330,9 @@ if has_permission("manage_university"):
     st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
     if st.sidebar.button("🏫 University Admin", key="university_admin_sidebar", use_container_width=True):
         st.session_state.page = 13
+        st.rerun()
+    if st.sidebar.button("📚 Academic Management", key="academic_management_sidebar", use_container_width=True):
+        st.session_state.page = 16
         st.rerun()
 
 dark_mode_toggle = st.sidebar.toggle("Dark mode", value=st.session_state.dark_mode)
@@ -4253,6 +4268,768 @@ elif st.session_state.page == 15 and st.session_state.user_role in {"faculty", "
                     st.info("No faculty AI generations for this course yet.")
 
             st.markdown('<div class="ai-panel"><div class="ai-badge">Strict institutional grounding</div><div class="ai-title">🔐 Faculty AI only uses the selected course knowledge base</div><div class="ai-text">The assistant receives the selected course material and course metadata. It does not receive another teacher’s courses or a student’s private documents. When the stored course material does not support a request, the AI is instructed not to fill the gap with general knowledge.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 16 and st.session_state.user_role in {"university_admin", "creator"}:
+    st.markdown(
+        '<div class="page-banner"><div class="page-title">📚 Academic Management</div><div class="page-sub">Manage degree programs, semester structures, curriculum mappings, sections, faculty assignments, enrollment, and the university course catalog.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    institution_id = DEFAULT_INSTITUTION_ID
+
+    program_rows = cursor.execute(
+        "SELECT p.id, p.name, p.code, p.degree_level, p.duration_years, p.total_credits, d.name, p.active "
+        "FROM academic_programs p LEFT JOIN departments d ON d.id = p.department_id "
+        "WHERE p.institution_id = ? ORDER BY p.name",
+        (institution_id,),
+    ).fetchall()
+
+    active_program_count = int(cursor.execute(
+        "SELECT COUNT(*) FROM academic_programs WHERE institution_id = ? AND active = 1",
+        (institution_id,),
+    ).fetchone()[0] or 0)
+    semester_count = int(cursor.execute(
+        "SELECT COUNT(*) FROM academic_semesters s JOIN academic_programs p ON p.id = s.program_id WHERE p.institution_id = ? AND s.active = 1",
+        (institution_id,),
+    ).fetchone()[0] or 0)
+    mapped_course_count = int(cursor.execute(
+        "SELECT COUNT(DISTINCT cp.course_id) FROM course_programs cp JOIN institution_courses c ON c.id = cp.course_id WHERE c.institution_id = ?",
+        (institution_id,),
+    ).fetchone()[0] or 0)
+    section_count = int(cursor.execute(
+        "SELECT COUNT(*) FROM course_sections WHERE institution_id = ? AND active = 1",
+        (institution_id,),
+    ).fetchone()[0] or 0)
+    section_enrollment_count = int(cursor.execute(
+        "SELECT COUNT(*) FROM section_enrollments se JOIN course_sections cs ON cs.id = se.section_id WHERE cs.institution_id = ? AND cs.active = 1",
+        (institution_id,),
+    ).fetchone()[0] or 0)
+
+    s1, s2, s3, s4, s5 = st.columns(5)
+    s1.metric("Programs", active_program_count)
+    s2.metric("Program semesters", semester_count)
+    s3.metric("Mapped courses", mapped_course_count)
+    s4.metric("Active sections", section_count)
+    s5.metric("Section enrollments", section_enrollment_count)
+
+    tab_programs, tab_curriculum, tab_sections, tab_enrollment, tab_catalog = st.tabs(
+        ["🎓 Programs & Semesters", "🧩 Curriculum", "🏫 Sections & Faculty", "👥 Enrollment", "📖 Course Catalog"]
+    )
+
+    with tab_programs:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">🎓 Degree / program structure</div><div class="panel-sub">Create the formal academic programs offered by this institution.</div></div>',
+            unsafe_allow_html=True,
+        )
+        dept_rows = cursor.execute(
+            "SELECT id, name, code FROM departments WHERE institution_id = ? ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+        dept_labels = ["No department"] + [
+            f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in dept_rows
+        ]
+
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            program_name = st.text_input("Program name", placeholder="e.g. BS Artificial Intelligence", key="academic_program_name")
+            program_code = st.text_input("Program code", placeholder="e.g. BSAI", key="academic_program_code")
+            program_level = st.selectbox(
+                "Degree level",
+                ["Bachelor", "Master", "MPhil", "PhD", "Diploma", "Certificate"],
+                key="academic_program_level",
+            )
+            program_department = st.selectbox("Department", dept_labels, key="academic_program_department")
+        with pc2:
+            program_duration = st.number_input(
+                "Duration (years)", min_value=0.5, max_value=10.0, value=4.0, step=0.5,
+                key="academic_program_duration",
+            )
+            program_total_credits = st.number_input(
+                "Total credits", min_value=0, max_value=300, value=130, step=1,
+                key="academic_program_total_credits",
+            )
+            program_description = st.text_area(
+                "Program description",
+                placeholder="Brief description of the degree/program and its academic focus.",
+                key="academic_program_description",
+            )
+            create_program = st.button(
+                "➕ Create program", key="create_academic_program", use_container_width=True
+            )
+
+        if create_program:
+            cleaned_name = program_name.strip()
+            cleaned_code = program_code.strip()
+            if not cleaned_name:
+                st.error("Enter a program name.")
+            else:
+                duplicate_program = cursor.execute(
+                    "SELECT id FROM academic_programs WHERE institution_id = ? AND lower(name) = lower(?)",
+                    (institution_id, cleaned_name),
+                ).fetchone()
+                duplicate_code = None
+                if cleaned_code:
+                    duplicate_code = cursor.execute(
+                        "SELECT id FROM academic_programs WHERE institution_id = ? AND lower(COALESCE(code,'')) = lower(?)",
+                        (institution_id, cleaned_code),
+                    ).fetchone()
+                if duplicate_program or duplicate_code:
+                    st.warning("A program with that name or code already exists.")
+                else:
+                    chosen_dept_id = None
+                    if program_department != "No department" and dept_rows:
+                        chosen_dept_id = dept_rows[dept_labels.index(program_department) - 1][0]
+                    cursor.execute(
+                        "INSERT INTO academic_programs (id, institution_id, department_id, name, code, degree_level, duration_years, total_credits, description, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                        (
+                            f"program-{uuid.uuid4().hex}",
+                            institution_id,
+                            chosen_dept_id,
+                            cleaned_name,
+                            cleaned_code,
+                            program_level,
+                            float(program_duration),
+                            int(program_total_credits),
+                            program_description.strip(),
+                            AUTH_ID,
+                            datetime.now().isoformat(timespec="seconds"),
+                        ),
+                    )
+                    conn.commit()
+                    write_audit_log(
+                        "academic_program_created",
+                        AUTH_ID,
+                        st.session_state.user_role,
+                        None,
+                        f"Created academic program {cleaned_name} ({cleaned_code})",
+                    )
+                    st.success("Academic program created.")
+                    st.rerun()
+
+        if program_rows:
+            st.markdown("**Program catalog**")
+            st.dataframe(
+                [
+                    {
+                        "Program": r[1],
+                        "Code": r[2] or "—",
+                        "Level": r[3] or "—",
+                        "Duration": f"{r[4]:g} years" if r[4] is not None else "—",
+                        "Credits": r[5] or 0,
+                        "Department": r[6] or "—",
+                        "Status": "Active" if int(r[7] or 0) else "Inactive",
+                    }
+                    for r in program_rows
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Create a program to start building a degree structure.")
+
+        if program_rows:
+            program_map = {f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in program_rows}
+            selected_program_label = st.selectbox(
+                "Program for semester structure",
+                list(program_map.keys()),
+                key="academic_semester_program",
+            )
+            selected_program = program_map[selected_program_label]
+            selected_program_id = selected_program[0]
+
+            st.markdown(
+                '<div class="panel" style="margin-top:18px;"><div class="panel-title">📅 Semester structure</div><div class="panel-sub">Define the semester sequence for the selected degree program.</div></div>',
+                unsafe_allow_html=True,
+            )
+            semester_existing = cursor.execute(
+                "SELECT id, semester_no, name, academic_year, start_date, end_date, active FROM academic_semesters WHERE program_id = ? ORDER BY semester_no",
+                (selected_program_id,),
+            ).fetchall()
+
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                sem_no_default = max([int(r[1]) for r in semester_existing], default=0) + 1
+                sem_no = st.number_input(
+                    "Semester number", min_value=1, max_value=20, value=sem_no_default, step=1,
+                    key="academic_semester_number",
+                )
+                sem_name = st.text_input(
+                    "Semester name", value=f"{int(sem_no)}th Semester" if int(sem_no) not in (1, 2) else ("1st Semester" if int(sem_no) == 1 else "2nd Semester"),
+                    key="academic_semester_name",
+                )
+            with sc2:
+                academic_year = st.text_input(
+                    "Academic year", placeholder="e.g. 2026-27", key="academic_semester_year"
+                )
+                start_date = st.date_input("Start date", value=date.today(), key="academic_semester_start")
+            with sc3:
+                end_date = st.date_input("End date", value=date.today(), key="academic_semester_end")
+                create_semester = st.button(
+                    "➕ Add semester", key="create_academic_semester", use_container_width=True
+                )
+
+            if create_semester:
+                semester_name_clean = sem_name.strip() or f"Semester {int(sem_no)}"
+                duplicate_semester = cursor.execute(
+                    "SELECT id FROM academic_semesters WHERE program_id = ? AND semester_no = ?",
+                    (selected_program_id, int(sem_no)),
+                ).fetchone()
+                if duplicate_semester:
+                    st.warning("That semester number already exists for this program.")
+                elif end_date < start_date:
+                    st.error("End date cannot be earlier than the start date.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO academic_semesters (id, program_id, semester_no, name, academic_year, start_date, end_date, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                        (
+                            f"semester-{uuid.uuid4().hex}",
+                            selected_program_id,
+                            int(sem_no),
+                            semester_name_clean,
+                            academic_year.strip(),
+                            start_date.isoformat(),
+                            end_date.isoformat(),
+                            AUTH_ID,
+                            datetime.now().isoformat(timespec="seconds"),
+                        ),
+                    )
+                    conn.commit()
+                    write_audit_log(
+                        "academic_semester_created",
+                        AUTH_ID,
+                        st.session_state.user_role,
+                        None,
+                        f"Created semester {semester_name_clean} for {selected_program[1]}",
+                    )
+                    st.success("Semester added.")
+                    st.rerun()
+
+            if semester_existing:
+                st.dataframe(
+                    [
+                        {
+                            "Semester": r[2],
+                            "No.": r[1],
+                            "Academic year": r[3] or "—",
+                            "Start": r[4] or "—",
+                            "End": r[5] or "—",
+                            "Status": "Active" if int(r[6] or 0) else "Inactive",
+                        }
+                        for r in semester_existing
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No semesters have been created for this program yet.")
+
+    with tab_curriculum:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">🧩 Curriculum mapping</div><div class="panel-sub">Connect existing institution courses to a degree program and an appropriate semester.</div></div>',
+            unsafe_allow_html=True,
+        )
+        course_rows = cursor.execute(
+            "SELECT c.id, c.name, c.code, d.name, c.credits, c.semester FROM institution_courses c LEFT JOIN departments d ON d.id = c.department_id WHERE c.institution_id = ? AND c.active = 1 ORDER BY c.name",
+            (institution_id,),
+        ).fetchall()
+        program_rows_current = cursor.execute(
+            "SELECT id, name, code FROM academic_programs WHERE institution_id = ? AND active = 1 ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+
+        if not course_rows:
+            st.info("Create courses in University Admin first, then map them into a program curriculum.")
+        elif not program_rows_current:
+            st.info("Create at least one academic program before mapping a curriculum.")
+        else:
+            curr_pmap = {
+                f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in program_rows_current
+            }
+            curr_program_label = st.selectbox("Program", list(curr_pmap.keys()), key="curriculum_program")
+            curr_program = curr_pmap[curr_program_label]
+
+            curr_sem_rows = cursor.execute(
+                "SELECT id, semester_no, name FROM academic_semesters WHERE program_id = ? AND active = 1 ORDER BY semester_no",
+                (curr_program[0],),
+            ).fetchall()
+            curr_sem_map = {"No semester": None}
+            curr_sem_map.update({f"{r[1]}. {r[2]}": r for r in curr_sem_rows})
+
+            c1, c2 = st.columns(2)
+            with c1:
+                course_map = {
+                    f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in course_rows
+                }
+                curriculum_course_label = st.selectbox(
+                    "Course", list(course_map.keys()), key="curriculum_course"
+                )
+                curriculum_course = course_map[curriculum_course_label]
+            with c2:
+                curriculum_sem_label = st.selectbox(
+                    "Program semester", list(curr_sem_map.keys()), key="curriculum_semester"
+                )
+                curriculum_semester = curr_sem_map[curriculum_sem_label]
+                curriculum_recommended = st.checkbox(
+                    "Recommended in this curriculum",
+                    value=True,
+                    key="curriculum_recommended",
+                )
+
+            map_course_button = st.button(
+                "🔗 Add course to curriculum", key="map_course_program", use_container_width=True
+            )
+            if map_course_button:
+                existing_mapping = cursor.execute(
+                    "SELECT 1 FROM course_programs WHERE program_id = ? AND course_id = ? AND ((semester_id IS NULL AND ? IS NULL) OR semester_id = ?)",
+                    (curr_program[0], curriculum_course[0], curriculum_semester[0] if curriculum_semester else None, curriculum_semester[0] if curriculum_semester else None),
+                ).fetchone()
+                if existing_mapping:
+                    st.info("This course is already mapped to that program/semester.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO course_programs (program_id, course_id, semester_id, recommended) VALUES (?, ?, ?, ?)",
+                        (
+                            curr_program[0],
+                            curriculum_course[0],
+                            curriculum_semester[0] if curriculum_semester else None,
+                            1 if curriculum_recommended else 0,
+                        ),
+                    )
+                    conn.commit()
+                    write_audit_log(
+                        "course_mapped_to_program",
+                        AUTH_ID,
+                        st.session_state.user_role,
+                        None,
+                        f"Mapped {curriculum_course[1]} to {curr_program[1]}",
+                    )
+                    st.success("Course added to curriculum.")
+                    st.rerun()
+
+            mapped_rows = cursor.execute(
+                "SELECT c.id, c.name, c.code, c.credits, s.semester_no, s.name, cp.recommended "
+                "FROM course_programs cp JOIN institution_courses c ON c.id = cp.course_id "
+                "LEFT JOIN academic_semesters s ON s.id = cp.semester_id "
+                "WHERE cp.program_id = ? ORDER BY COALESCE(s.semester_no, 999), c.name",
+                (curr_program[0],),
+            ).fetchall()
+            if mapped_rows:
+                st.dataframe(
+                    [
+                        {
+                            "Course": r[1],
+                            "Code": r[2] or "—",
+                            "Credits": r[3] or 0,
+                            "Semester": f"{r[4]}. {r[5]}" if r[4] else "Unscheduled",
+                            "Recommended": "Yes" if int(r[6] or 0) else "No",
+                        }
+                        for r in mapped_rows
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No courses are mapped into this program yet.")
+
+    with tab_sections:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">🏫 Sections & faculty</div><div class="panel-sub">Create course sections, set room/schedule/capacity, and assign teaching staff at section level.</div></div>',
+            unsafe_allow_html=True,
+        )
+        admin_courses = institution_courses_for_admin(institution_id)
+        section_program_rows = cursor.execute(
+            "SELECT id, name, code FROM academic_programs WHERE institution_id = ? AND active = 1 ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+        faculty_accounts = cursor.execute(
+            "SELECT auth_id, name, email FROM users WHERE institution_id = ? AND role = 'faculty' AND account_status = 'active' ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+
+        if not admin_courses:
+            st.info("Create at least one institution course before creating sections.")
+        else:
+            sec_course_map = {
+                f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in admin_courses
+            }
+            sec_course_label = st.selectbox("Course", list(sec_course_map.keys()), key="section_course")
+            sec_course = sec_course_map[sec_course_label]
+            sec_program_map = {"No program": None}
+            sec_program_map.update({
+                f"{r[1]}" + (f" ({r[2]})" if r[2] else ""): r for r in section_program_rows
+            })
+            sec_program_label = st.selectbox("Program", list(sec_program_map.keys()), key="section_program")
+            sec_program = sec_program_map[sec_program_label]
+
+            sec_sem_map = {"No semester": None}
+            if sec_program:
+                sec_semester_rows = cursor.execute(
+                    "SELECT id, semester_no, name FROM academic_semesters WHERE program_id = ? AND active = 1 ORDER BY semester_no",
+                    (sec_program[0],),
+                ).fetchall()
+                sec_sem_map.update({f"{r[1]}. {r[2]}": r for r in sec_semester_rows})
+            sec_sem_label = st.selectbox("Program semester", list(sec_sem_map.keys()), key="section_semester")
+            sec_sem = sec_sem_map[sec_sem_label]
+
+            sca, scb = st.columns(2)
+            with sca:
+                section_name = st.text_input("Section name", placeholder="e.g. A", key="section_name")
+                section_room = st.text_input("Room", placeholder="e.g. Lab-3 / Room 204", key="section_room")
+                section_capacity = st.number_input(
+                    "Capacity", min_value=1, max_value=1000, value=50, step=1, key="section_capacity"
+                )
+            with scb:
+                section_schedule = st.text_area(
+                    "Schedule", placeholder="e.g. Mon & Wed • 10:00–11:30 AM", key="section_schedule"
+                )
+                create_section = st.button(
+                    "➕ Create section", key="create_course_section", use_container_width=True
+                )
+
+            if create_section:
+                if not section_name.strip():
+                    st.error("Enter a section name.")
+                else:
+                    duplicate_section = cursor.execute(
+                        "SELECT id FROM course_sections WHERE institution_id = ? AND course_id = ? AND COALESCE(program_id,'') = COALESCE(?, '') AND lower(section_name) = lower(?) AND active = 1",
+                        (institution_id, sec_course[0], sec_program[0] if sec_program else None, section_name.strip()),
+                    ).fetchone()
+                    if duplicate_section:
+                        st.warning("An active section with the same name already exists for this course/program.")
+                    else:
+                        cursor.execute(
+                            "INSERT INTO course_sections (id, institution_id, course_id, program_id, semester_id, section_name, room, schedule, capacity, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                            (
+                                f"section-{uuid.uuid4().hex}",
+                                institution_id,
+                                sec_course[0],
+                                sec_program[0] if sec_program else None,
+                                sec_sem[0] if sec_sem else None,
+                                section_name.strip(),
+                                section_room.strip(),
+                                section_schedule.strip(),
+                                int(section_capacity),
+                                AUTH_ID,
+                                datetime.now().isoformat(timespec="seconds"),
+                            ),
+                        )
+                        conn.commit()
+                        write_audit_log(
+                            "course_section_created",
+                            AUTH_ID,
+                            st.session_state.user_role,
+                            None,
+                            f"Created section {section_name.strip()} for {sec_course[1]}",
+                        )
+                        st.success("Section created.")
+                        st.rerun()
+
+            active_sections = cursor.execute(
+                "SELECT cs.id, c.name, c.code, p.name, s.name, cs.section_name, cs.room, cs.schedule, cs.capacity "
+                "FROM course_sections cs JOIN institution_courses c ON c.id = cs.course_id "
+                "LEFT JOIN academic_programs p ON p.id = cs.program_id "
+                "LEFT JOIN academic_semesters s ON s.id = cs.semester_id "
+                "WHERE cs.institution_id = ? AND cs.active = 1 ORDER BY c.name, cs.section_name",
+                (institution_id,),
+            ).fetchall()
+
+            if active_sections:
+                st.markdown("**Active course sections**")
+                st.dataframe(
+                    [
+                        {
+                            "Course": r[1],
+                            "Code": r[2] or "—",
+                            "Program": r[3] or "—",
+                            "Semester": r[4] or "—",
+                            "Section": r[5],
+                            "Room": r[6] or "—",
+                            "Schedule": r[7] or "—",
+                            "Capacity": r[8],
+                            "Enrolled": int(cursor.execute("SELECT COUNT(*) FROM section_enrollments WHERE section_id = ?", (r[0],)).fetchone()[0] or 0),
+                        }
+                        for r in active_sections
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                section_map = {
+                    f"{r[1]} • Section {r[5]}" + (f" • {r[3]}" if r[3] else ""): r
+                    for r in active_sections
+                }
+                selected_section_label = st.selectbox(
+                    "Section for faculty assignment",
+                    list(section_map.keys()),
+                    key="section_faculty_section",
+                )
+                selected_section = section_map[selected_section_label]
+
+                if faculty_accounts:
+                    sec_faculty_map = {f"{r[1]} • {r[2]}": r for r in faculty_accounts}
+                    selected_sec_faculty_label = st.selectbox(
+                        "Faculty member", list(sec_faculty_map.keys()), key="section_faculty_member"
+                    )
+                    selected_sec_faculty = sec_faculty_map[selected_sec_faculty_label]
+                    assign_section_faculty = st.button(
+                        "👨‍🏫 Assign faculty to section",
+                        key="assign_section_faculty",
+                        use_container_width=True,
+                    )
+                    if assign_section_faculty:
+                        existing = cursor.execute(
+                            "SELECT 1 FROM section_faculty WHERE section_id = ? AND user_id = ?",
+                            (selected_section[0], selected_sec_faculty[0]),
+                        ).fetchone()
+                        if existing:
+                            st.info("That faculty member is already assigned to this section.")
+                        else:
+                            cursor.execute(
+                                "INSERT INTO section_faculty (section_id, user_id, assigned_at, assigned_by) VALUES (?, ?, ?, ?)",
+                                (
+                                    selected_section[0],
+                                    selected_sec_faculty[0],
+                                    datetime.now().isoformat(timespec="seconds"),
+                                    AUTH_ID,
+                                ),
+                            )
+                            # Keep the existing course-level authorization in sync.
+                            course_faculty_exists = cursor.execute(
+                                "SELECT 1 FROM course_faculty WHERE course_id = ? AND user_id = ?",
+                                (selected_section[1], selected_sec_faculty[0]),
+                            ).fetchone()
+                            if not course_faculty_exists:
+                                cursor.execute(
+                                    "INSERT INTO course_faculty (course_id, user_id, assigned_at, assigned_by) VALUES (?, ?, ?, ?)",
+                                    (
+                                        selected_section[1],
+                                        selected_sec_faculty[0],
+                                        datetime.now().isoformat(timespec="seconds"),
+                                        AUTH_ID,
+                                    ),
+                                )
+                            conn.commit()
+                            write_audit_log(
+                                "faculty_assigned_to_section",
+                                AUTH_ID,
+                                st.session_state.user_role,
+                                selected_sec_faculty[0],
+                                f"Assigned {selected_sec_faculty[2]} to section {selected_section[5]} of {selected_section[1]}",
+                            )
+                            st.success("Faculty assignment saved.")
+                            st.rerun()
+
+                current_section_faculty = cursor.execute(
+                    "SELECT u.name, u.email, u.department FROM section_faculty sf JOIN users u ON u.auth_id = sf.user_id WHERE sf.section_id = ? ORDER BY u.name",
+                    (selected_section[0],),
+                ).fetchall()
+                if current_section_faculty:
+                    st.dataframe(
+                        [{"Faculty": r[0], "Email": r[1], "Department": r[2] or "—"} for r in current_section_faculty],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No faculty has been assigned to this section yet.")
+            else:
+                st.info("Create a section to manage section-level faculty assignments.")
+
+    with tab_enrollment:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">👥 Student enrollment</div><div class="panel-sub">Enroll students into specific course sections. Course-level authorization is kept synchronized for existing StudySphere features.</div></div>',
+            unsafe_allow_html=True,
+        )
+        active_sections = cursor.execute(
+            "SELECT cs.id, c.name, c.code, cs.section_name, cs.capacity FROM course_sections cs JOIN institution_courses c ON c.id = cs.course_id WHERE cs.institution_id = ? AND cs.active = 1 ORDER BY c.name, cs.section_name",
+            (institution_id,),
+        ).fetchall()
+        student_accounts = cursor.execute(
+            "SELECT auth_id, name, email, degree, semester FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active' ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+
+        if not active_sections:
+            st.info("Create an active section before enrolling students.")
+        elif not student_accounts:
+            st.info("There are no active student accounts available for enrollment.")
+        else:
+            enrollment_section_map = {
+                f"{r[1]} • Section {r[3]} • {int(cursor.execute('SELECT COUNT(*) FROM section_enrollments WHERE section_id = ?', (r[0],)).fetchone()[0] or 0)}/{r[4]}": r
+                for r in active_sections
+            }
+            chosen_enrollment_section_label = st.selectbox(
+                "Section", list(enrollment_section_map.keys()), key="section_enrollment_section"
+            )
+            chosen_enrollment_section = enrollment_section_map[chosen_enrollment_section_label]
+            enrollment_student_map = {f"{r[1]} • {r[2]}": r for r in student_accounts}
+            chosen_student_label = st.selectbox(
+                "Student", list(enrollment_student_map.keys()), key="section_enrollment_student"
+            )
+            chosen_student = enrollment_student_map[chosen_student_label]
+
+            section_capacity_count = int(cursor.execute(
+                "SELECT COUNT(*) FROM section_enrollments WHERE section_id = ?",
+                (chosen_enrollment_section[0],),
+            ).fetchone()[0] or 0)
+
+            if section_capacity_count >= int(chosen_enrollment_section[4]):
+                st.warning("This section is at capacity.")
+            else:
+                enroll_section_button = st.button(
+                    "🎓 Enroll student in section",
+                    key="enroll_student_in_section",
+                    use_container_width=True,
+                )
+                if enroll_section_button:
+                    existing_section_enrollment = cursor.execute(
+                        "SELECT 1 FROM section_enrollments WHERE section_id = ? AND user_id = ?",
+                        (chosen_enrollment_section[0], chosen_student[0]),
+                    ).fetchone()
+                    if existing_section_enrollment:
+                        st.info("This student is already enrolled in the selected section.")
+                    else:
+                        cursor.execute(
+                            "INSERT INTO section_enrollments (section_id, user_id, enrolled_at, enrolled_by) VALUES (?, ?, ?, ?)",
+                            (
+                                chosen_enrollment_section[0],
+                                chosen_student[0],
+                                datetime.now().isoformat(timespec="seconds"),
+                                AUTH_ID,
+                            ),
+                        )
+                        course_for_section = cursor.execute(
+                            "SELECT course_id FROM course_sections WHERE id = ?",
+                            (chosen_enrollment_section[0],),
+                        ).fetchone()
+                        if course_for_section:
+                            course_enrolled = cursor.execute(
+                                "SELECT 1 FROM course_enrollments WHERE course_id = ? AND user_id = ?",
+                                (course_for_section[0], chosen_student[0]),
+                            ).fetchone()
+                            if not course_enrolled:
+                                cursor.execute(
+                                    "INSERT INTO course_enrollments (course_id, user_id, enrolled_at, enrolled_by) VALUES (?, ?, ?, ?)",
+                                    (
+                                        course_for_section[0],
+                                        chosen_student[0],
+                                        datetime.now().isoformat(timespec="seconds"),
+                                        AUTH_ID,
+                                    ),
+                                )
+                        conn.commit()
+                        write_audit_log(
+                            "student_enrolled_in_section",
+                            AUTH_ID,
+                            st.session_state.user_role,
+                            chosen_student[0],
+                            f"Enrolled {chosen_student[2]} in section {chosen_enrollment_section[3]}",
+                        )
+                        st.success("Student enrolled in section.")
+                        st.rerun()
+
+            selected_roster_rows = cursor.execute(
+                "SELECT u.name, u.email, u.degree, u.semester, se.enrolled_at FROM section_enrollments se JOIN users u ON u.auth_id = se.user_id WHERE se.section_id = ? ORDER BY u.name",
+                (chosen_enrollment_section[0],),
+            ).fetchall()
+            if selected_roster_rows:
+                st.markdown("**Section roster**")
+                st.dataframe(
+                    [
+                        {
+                            "Student": r[0],
+                            "Email": r[1],
+                            "Program": r[2] or "—",
+                            "Semester": r[3] or "—",
+                            "Enrolled": r[4] or "—",
+                        }
+                        for r in selected_roster_rows
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No students are enrolled in this section yet.")
+
+    with tab_catalog:
+        st.markdown(
+            '<div class="panel"><div class="panel-title">📖 University course catalog</div><div class="panel-sub">Searchable institution-owned course catalog with curriculum placement, assigned faculty and active sections.</div></div>',
+            unsafe_allow_html=True,
+        )
+        catalog_depts = cursor.execute(
+            "SELECT id, name FROM departments WHERE institution_id = ? ORDER BY name",
+            (institution_id,),
+        ).fetchall()
+        catalog_dept_map = {"All departments": None}
+        catalog_dept_map.update({r[1]: r[0] for r in catalog_depts})
+        catalog_dept_choice = st.selectbox(
+            "Department filter", list(catalog_dept_map.keys()), key="academic_catalog_department_filter"
+        )
+        catalog_search = st.text_input(
+            "Search courses",
+            placeholder="Search by course name or code",
+            key="academic_catalog_search",
+        ).strip().lower()
+
+        query = (
+            "SELECT c.id, c.name, c.code, d.name, c.credits, c.semester, c.description, c.active "
+            "FROM institution_courses c LEFT JOIN departments d ON d.id = c.department_id "
+            "WHERE c.institution_id = ?"
+        )
+        params = [institution_id]
+        if catalog_dept_map[catalog_dept_choice]:
+            query += " AND c.department_id = ?"
+            params.append(catalog_dept_map[catalog_dept_choice])
+        if catalog_search:
+            query += " AND (lower(c.name) LIKE ? OR lower(COALESCE(c.code,'')) LIKE ?)"
+            like_term = f"%{catalog_search}%"
+            params.extend([like_term, like_term])
+        query += " ORDER BY c.name"
+        catalog_rows = cursor.execute(query, tuple(params)).fetchall()
+
+        if catalog_rows:
+            catalog_view = []
+            for row in catalog_rows:
+                course_id = row[0]
+                program_labels = [
+                    x[0]
+                    for x in cursor.execute(
+                        "SELECT p.name FROM course_programs cp JOIN academic_programs p ON p.id = cp.program_id WHERE cp.course_id = ? ORDER BY p.name",
+                        (course_id,),
+                    ).fetchall()
+                ]
+                faculty_labels = [
+                    x[0]
+                    for x in cursor.execute(
+                        "SELECT u.name FROM course_faculty cf JOIN users u ON u.auth_id = cf.user_id WHERE cf.course_id = ? ORDER BY u.name",
+                        (course_id,),
+                    ).fetchall()
+                ]
+                section_total = int(cursor.execute(
+                    "SELECT COUNT(*) FROM course_sections WHERE course_id = ? AND active = 1",
+                    (course_id,),
+                ).fetchone()[0] or 0)
+                catalog_view.append(
+                    {
+                        "Course": row[1],
+                        "Code": row[2] or "—",
+                        "Department": row[3] or "—",
+                        "Credits": row[4] or 0,
+                        "Legacy semester": row[5] or "—",
+                        "Programs": ", ".join(program_labels) if program_labels else "—",
+                        "Faculty": ", ".join(faculty_labels) if faculty_labels else "—",
+                        "Active sections": section_total,
+                        "Status": "Active" if int(row[7] or 0) else "Inactive",
+                    }
+                )
+            st.dataframe(catalog_view, use_container_width=True, hide_index=True)
+        else:
+            st.info("No catalog courses match the selected filters.")
+
+        st.markdown(
+            '<div class="ai-panel"><div class="ai-badge">University Edition • Step 6</div><div class="ai-title">🏛️ Academic structure is now organized</div><div class="ai-text">StudySphere now supports formal academic programs, semester-by-semester curriculum mapping, course sections, section-level faculty assignment, section enrollment, and an institution-scoped course catalog. Existing course-level authorization remains intact so the AI, My University, Faculty Center and analytics continue to work with the data already in your database.</div></div>',
+            unsafe_allow_html=True,
+        )
+
 
 elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
