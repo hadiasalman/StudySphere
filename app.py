@@ -8,6 +8,7 @@ import hmac
 import os
 import re
 import secrets
+import time
 import csv
 import sqlite3
 import uuid
@@ -113,6 +114,12 @@ if "presentation_data" not in st.session_state:
 
 if "presentation_prompt" not in st.session_state:
     st.session_state.presentation_prompt = ""
+
+if "presentation_last_attempt_at" not in st.session_state:
+    st.session_state.presentation_last_attempt_at = 0.0
+
+if "presentation_rate_limit_until" not in st.session_state:
+    st.session_state.presentation_rate_limit_until = 0.0
 
 if "signup_recovery_code" not in st.session_state:
     st.session_state.signup_recovery_code = ""
@@ -2255,6 +2262,7 @@ def _presentation_json_from_text(raw_text):
 
 
 def _available_gemini_generation_models(api_key):
+    """Return usable Gemini generation models without repeatedly calling the models endpoint."""
     api_key = str(api_key or "").strip()
     preferred = [
         "gemini-3.8-flash",
@@ -2267,6 +2275,24 @@ def _available_gemini_generation_models(api_key):
     ]
     if not api_key:
         return preferred
+
+    # The model-list endpoint is only discovery. Cache it briefly so a single
+    # presentation request does not add another API request every time the
+    # Streamlit script reruns. The cache is tied to the API-key fingerprint.
+    try:
+        key_fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        cached = st.session_state.get("gemini_models_cache")
+        now = time.time()
+        if (
+            isinstance(cached, dict)
+            and cached.get("key") == key_fingerprint
+            and float(cached.get("expires_at", 0)) > now
+            and isinstance(cached.get("models"), list)
+            and cached.get("models")
+        ):
+            return list(cached["models"])
+    except Exception:
+        pass
 
     try:
         request = urllib.request.Request(
@@ -2290,10 +2316,20 @@ def _available_gemini_generation_models(api_key):
             model for model in available
             if model.startswith("gemini-") and model not in ordered
         )
-        return ordered or preferred
+        result = ordered or preferred
+        try:
+            st.session_state.gemini_models_cache = {
+                "key": key_fingerprint,
+                "models": result,
+                "expires_at": time.time() + 600,
+            }
+        except Exception:
+            pass
+        return result
     except Exception:
+        # Discovery failure should never prevent generation. The generation
+        # request itself will return the precise API error if needed.
         return preferred
-
 
 def _normalize_presentation_deck(deck, slide_count):
     if not isinstance(deck, dict):
@@ -2352,10 +2388,45 @@ def _normalize_presentation_deck(deck, slide_count):
     return deck
 
 
+def _gemini_retry_after_seconds(http_error):
+    """Read Google's RetryInfo when available; otherwise use a safe short backoff."""
+    default_seconds = 8
+    try:
+        detail = http_error.read().decode("utf-8", errors="ignore")
+        parsed = json.loads(detail)
+        error_obj = parsed.get("error") or {}
+        for item in error_obj.get("details") or []:
+            if not isinstance(item, dict):
+                continue
+            retry_delay = item.get("retryDelay")
+            if retry_delay is None:
+                continue
+            text = str(retry_delay).strip().lower()
+            match = re.match(r"(\d+(?:\.\d+)?)s$", text)
+            if match:
+                return max(1, min(120, int(float(match.group(1)))))
+    except Exception:
+        pass
+    return default_seconds
+
+
 def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone, theme_name, use_notes):
     api_key = str(GLOBAL_GEMINI_API_KEY or "").strip()
     if not api_key:
         return None, "The presentation generator is not configured yet."
+
+    # Prevent accidental double-clicks / rapid Streamlit reruns from sending
+    # duplicate expensive generation requests. This does not block normal use.
+    now = time.time()
+    rate_limit_until = float(st.session_state.get("presentation_rate_limit_until", 0.0) or 0.0)
+    if rate_limit_until > now:
+        wait_seconds = max(1, int(rate_limit_until - now + 0.999))
+        return None, f"Gemini is temporarily rate-limited. Please wait about {wait_seconds} seconds and try again."
+
+    last_attempt = float(st.session_state.get("presentation_last_attempt_at", 0.0) or 0.0)
+    if last_attempt and (now - last_attempt) < 3:
+        return None, "Please wait a moment before generating another presentation."
+    st.session_state.presentation_last_attempt_at = now
 
     rag_context = ""
     try:
@@ -2425,15 +2496,22 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
     )
 
     models = _available_gemini_generation_models(api_key)
+    # One model at a time is intentional: trying many models after a quota
+    # response does not restore quota and can create unnecessary API traffic.
+    models = list(models[:3])
     errors = []
 
-    for model in models[:10]:
+    # Keep the response budget proportional to the requested slide count. This
+    # reduces token pressure while still leaving enough room for structured JSON.
+    max_output_tokens = max(3500, min(8000, 1200 + int(slide_count) * 650))
+
+    for model in models:
         structured_payload = {
             "contents": [{"role": "user", "parts": [{"text": user_text}]}],
             "systemInstruction": {"parts": [{"text": system_text}]},
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 9000,
+                "maxOutputTokens": max_output_tokens,
                 "responseMimeType": "application/json",
                 "responseSchema": schema,
             },
@@ -2444,11 +2522,14 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
             "systemInstruction": {"parts": [{"text": system_text}]},
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 9000,
+                "maxOutputTokens": max_output_tokens,
             },
         }
 
-        for payload in (structured_payload, plain_payload):
+        # Normally structured JSON succeeds in one request. Only fall back to
+        # plain JSON when the API rejects the structured-response configuration.
+        payloads = (structured_payload, plain_payload)
+        for payload_index, payload in enumerate(payloads):
             request = urllib.request.Request(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 data=json.dumps(payload).encode("utf-8"),
@@ -2466,6 +2547,7 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
                 parts = ((candidates[0].get("content") or {}).get("parts") or [])
                 raw = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
                 deck = _presentation_json_from_text(raw)
+                st.session_state.presentation_rate_limit_until = 0.0
                 return _normalize_presentation_deck(deck, int(slide_count)), ""
             except urllib.error.HTTPError as exc:
                 try:
@@ -2474,14 +2556,30 @@ def generate_presentation_deck(auth_id, prompt_text, slide_count, audience, tone
                     api_message = str(((parsed.get("error") or {}).get("message") or "Gemini request failed.")).strip()
                 except Exception:
                     api_message = "Gemini request failed."
+
                 errors.append(f"{model} ({exc.code}): {api_message}")
+
                 if exc.code == 429:
-                    return None, "Gemini rate limit reached. Please try again in a little while."
-                if exc.code in {400, 404, 500, 503}:
+                    wait_seconds = _gemini_retry_after_seconds(exc)
+                    st.session_state.presentation_rate_limit_until = time.time() + wait_seconds
+                    return None, f"Gemini rate limit reached. Please wait about {wait_seconds} seconds and try again."
+
+                # A 400 on structured JSON can mean the selected model does not
+                # support the response schema. Try the plain JSON request once.
+                if exc.code == 400 and payload_index == 0:
                     continue
+                if exc.code == 404:
+                    # Try the next confirmed generation model.
+                    break
+                if exc.code in {500, 503}:
+                    break
+                return None, f"Gemini rejected the presentation request: {api_message}"
             except Exception as exc:
                 errors.append(f"{model}: {type(exc).__name__}: {exc}")
-                continue
+                # Do not send another request for a parsing/JSON/runtime error.
+                # Returning the real error makes the failure visible instead of
+                # risking a second quota-consuming call.
+                return None, f"Presentation generation failed. {type(exc).__name__}: {exc}"
 
     useful = errors[-1] if errors else "No Gemini model was available."
     return None, f"Presentation generation failed. {useful}"
