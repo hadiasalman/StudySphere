@@ -87,6 +87,15 @@ if "email" not in st.session_state:
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 
+if "user_role" not in st.session_state:
+    st.session_state.user_role = "student"
+
+if "institution_id" not in st.session_state:
+    st.session_state.institution_id = "default-institution"
+
+if "department" not in st.session_state:
+    st.session_state.department = ""
+
 if "ai_api_key" not in st.session_state:
     st.session_state.ai_api_key = ""
 
@@ -120,6 +129,8 @@ cursor = conn.cursor()
 
 cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT, password_changed_at TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS institutions (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id TEXT, actor_role TEXT, action TEXT NOT NULL, target_user_id TEXT, details TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, gemini_interaction_id TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, file_hash TEXT, uploaded_at TEXT NOT NULL, char_count INTEGER DEFAULT 0, chunk_count INTEGER DEFAULT 0)")
@@ -159,11 +170,54 @@ if "last_seen_at" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT")
 if "password_changed_at" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
+if "role" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'student'")
+if "institution_id" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN institution_id TEXT")
+if "department" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN department TEXT")
 
 backfill_now = datetime.now().isoformat(timespec="seconds")
 cursor.execute("UPDATE users SET created_at = COALESCE(created_at, ?) WHERE created_at IS NULL OR trim(created_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET last_seen_at = COALESCE(last_seen_at, created_at, ?) WHERE last_seen_at IS NULL OR trim(last_seen_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET password_changed_at = COALESCE(password_changed_at, created_at, ?) WHERE password_hash IS NOT NULL AND (password_changed_at IS NULL OR trim(password_changed_at) = '')", (backfill_now,))
+
+# ============================================================
+# INSTITUTION + AUDIT FOUNDATION
+# ============================================================
+def ensure_default_institution():
+    row = cursor.execute("SELECT id FROM institutions ORDER BY created_at LIMIT 1").fetchone()
+    if row:
+        institution_id = str(row[0])
+    else:
+        institution_id = "default-institution"
+        cursor.execute(
+            "INSERT INTO institutions (id, name, code, created_at) VALUES (?, ?, ?, ?)",
+            (institution_id, "StudySphere University", "SSU", datetime.now().isoformat(timespec="seconds")),
+        )
+    cursor.execute("UPDATE users SET institution_id = ? WHERE institution_id IS NULL OR trim(institution_id) = ''", (institution_id,))
+    conn.commit()
+    return institution_id
+
+
+def institution_name(institution_id=None):
+    institution_id = institution_id or st.session_state.get("institution_id")
+    row = cursor.execute("SELECT name FROM institutions WHERE id = ?", (institution_id,)).fetchone()
+    return str(row[0]) if row and row[0] else "StudySphere University"
+
+
+def write_audit_log(action, actor_user_id=None, actor_role=None, target_user_id=None, details=""):
+    try:
+        cursor.execute(
+            "INSERT INTO audit_logs (actor_user_id, actor_role, action, target_user_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (actor_user_id, actor_role, action, target_user_id, str(details or "")[:1000], datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+DEFAULT_INSTITUTION_ID = ensure_default_institution()
 
 # ============================================================
 # CREATOR / ADMIN CONFIGURATION
@@ -192,16 +246,19 @@ def configured_gemini_api_key():
 
 ADMIN_EMAIL = configured_admin_email()
 if ADMIN_EMAIL:
-    cursor.execute("UPDATE users SET is_admin = 0")
-    cursor.execute("UPDATE users SET is_admin = 1 WHERE lower(email) = ?", (ADMIN_EMAIL,))
+    cursor.execute("UPDATE users SET is_admin = 0 WHERE is_admin = 1 AND lower(email) != ?", (ADMIN_EMAIL,))
+    cursor.execute("UPDATE users SET is_admin = 1, role = 'creator' WHERE lower(email) = ?", (ADMIN_EMAIL,))
 else:
     admin_count = cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0]
     local_count = cursor.execute("SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0]
     if admin_count == 0 and local_count == 1:
         first_account = cursor.execute("SELECT auth_id FROM users WHERE password_hash IS NOT NULL ORDER BY rowid LIMIT 1").fetchone()
         if first_account:
-            cursor.execute("UPDATE users SET is_admin = 1 WHERE auth_id = ?", (first_account[0],))
+            cursor.execute("UPDATE users SET is_admin = 1, role = 'creator' WHERE auth_id = ?", (first_account[0],))
 
+# Preserve legacy administrators as creator roles and default all other local users to students.
+cursor.execute("UPDATE users SET role = 'creator' WHERE is_admin = 1")
+cursor.execute("UPDATE users SET role = 'student' WHERE (role IS NULL OR trim(role) = '') AND COALESCE(is_admin, 0) = 0")
 conn.commit()
 
 # ============================================================
@@ -797,11 +854,17 @@ def set_authenticated_user(auth_id, name, email):
     st.session_state.auth_id = str(auth_id)
     st.session_state.display_name = clean_name(name) or clean_email(email).split("@")[0].title()
     st.session_state.email = clean_email(email)
-    admin_row = cursor.execute("SELECT is_admin FROM users WHERE auth_id = ?", (str(auth_id),)).fetchone()
-    st.session_state.is_admin = bool(admin_row and int(admin_row[0] or 0) == 1)
+    user_row = cursor.execute("SELECT is_admin, role, institution_id, department FROM users WHERE auth_id = ?", (str(auth_id),)).fetchone()
+    st.session_state.is_admin = bool(user_row and int(user_row[0] or 0) == 1)
+    st.session_state.user_role = str((user_row[1] if user_row else "student") or ("creator" if st.session_state.is_admin else "student")).lower()
+    st.session_state.institution_id = str((user_row[2] if user_row and user_row[2] else DEFAULT_INSTITUTION_ID))
+    st.session_state.department = str((user_row[3] if user_row and user_row[3] else "") or "")
+    if st.session_state.is_admin:
+        st.session_state.user_role = "creator"
     now = datetime.now().isoformat(timespec="seconds")
-    cursor.execute("UPDATE users SET last_login_at = ?, last_seen_at = ? WHERE auth_id = ?", (now, now, str(auth_id)))
+    cursor.execute("UPDATE users SET last_login_at = ?, last_seen_at = ?, role = ? WHERE auth_id = ?", (now, now, st.session_state.user_role, str(auth_id)))
     conn.commit()
+    write_audit_log("login", str(auth_id), st.session_state.user_role, str(auth_id), "User signed in")
     # One application-wide Gemini key is reused for every authenticated user.
     st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
     st.session_state.ai_messages = []
@@ -2243,10 +2306,15 @@ def convert_document_format(file_bytes, file_name, output_format, title):
 
 
 def clear_authenticated_user():
+    if st.session_state.get("auth_id"):
+        write_audit_log("logout", str(st.session_state.get("auth_id")), st.session_state.get("user_role", "student"), str(st.session_state.get("auth_id")), "User signed out")
     st.session_state.auth_id = None
     st.session_state.display_name = ""
     st.session_state.email = ""
     st.session_state.is_admin = False
+    st.session_state.user_role = "student"
+    st.session_state.institution_id = DEFAULT_INSTITUTION_ID
+    st.session_state.department = ""
     st.session_state.ai_api_key = ""
     st.session_state.ai_messages = []
     st.session_state.active_chat_id = None
@@ -2258,7 +2326,7 @@ def current_user_from_session():
     if not auth_id:
         return None
     row = cursor.execute(
-        "SELECT auth_id, name, email, is_admin, created_at, last_login_at, last_seen_at FROM users WHERE auth_id = ?",
+        "SELECT auth_id, name, email, is_admin, role, institution_id, department, created_at, last_login_at, last_seen_at FROM users WHERE auth_id = ?",
         (auth_id,),
     ).fetchone()
     return row
@@ -2371,10 +2439,11 @@ def render_auth_screen():
                         else:
                             now = datetime.now().isoformat(timespec="seconds")
                             cursor.execute(
-                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now),
+                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID),
                             )
                         conn.commit()
+                        write_audit_log("account_created", auth_id, "student", auth_id, "New local StudySphere account created")
                         migrate_legacy_rows_to_first_local_account(auth_id)
                         st.session_state.signup_recovery_code = recovery_code
                         set_authenticated_user(auth_id, name, email)
@@ -2422,6 +2491,7 @@ def render_auth_screen():
                     (password_hash, password_salt, recovery_hash, recovery_salt, datetime.now().isoformat(timespec="seconds"), account[0]),
                 )
                 conn.commit()
+                write_audit_log("password_reset", account[0], "student", account[0], "User reset password using recovery code")
                 set_authenticated_user(account[0], account[1], account[2])
                 st.session_state.reset_recovery_code = new_recovery_code
                 st.success("Password reset successfully.")
@@ -2442,6 +2512,9 @@ if not current_user:
 AUTH_ID = str(current_user[0])
 DISPLAY_NAME = str(current_user[1] or "Student")
 EMAIL = str(current_user[2] or "")
+USER_ROLE = str(current_user[4] or ("creator" if int(current_user[3] or 0) == 1 else "student")).lower()
+INSTITUTION_ID = str(current_user[5] or DEFAULT_INSTITUTION_ID)
+DEPARTMENT = str(current_user[6] or "")
 
 # Load the single application-wide Gemini key silently.
 # It is never displayed and is not tied to the currently signed-in account.
@@ -2451,6 +2524,9 @@ st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
 st.session_state.display_name = DISPLAY_NAME
 st.session_state.email = EMAIL
 st.session_state.is_admin = bool(int(current_user[3] or 0) == 1) if len(current_user) > 3 else False
+st.session_state.user_role = "creator" if st.session_state.is_admin else USER_ROLE
+st.session_state.institution_id = INSTITUTION_ID
+st.session_state.department = DEPARTMENT
 cursor.execute("UPDATE users SET last_seen_at = ? WHERE auth_id = ?", (datetime.now().isoformat(timespec="seconds"), AUTH_ID))
 conn.commit()
 ensure_active_chat(AUTH_ID)
@@ -2471,8 +2547,14 @@ st.sidebar.markdown(
 
 st.sidebar.markdown('<div class="sidebar-label">Account</div>', unsafe_allow_html=True)
 initial = DISPLAY_NAME[:1].upper() if DISPLAY_NAME else "S"
+role_display = {
+    "creator": "Creator",
+    "university_admin": "University Admin",
+    "faculty": "Faculty",
+    "student": "Student",
+}.get(st.session_state.user_role, "Student")
 st.sidebar.markdown(
-    f'<div class="user-box"><div class="user-row"><div class="avatar">{initial}</div><div><div class="user-name">{DISPLAY_NAME}</div><div class="user-email">{EMAIL}</div></div></div></div>',
+    f'<div class="user-box"><div class="user-row"><div class="avatar">{initial}</div><div><div class="user-name">{DISPLAY_NAME}</div><div class="user-email">{EMAIL}</div><div style="margin-top:6px;display:inline-block;padding:3px 8px;border-radius:999px;background:var(--ss-primary-soft);color:var(--ss-primary);font-size:11px;font-weight:800;">{role_display}</div></div></div></div>',
     unsafe_allow_html=True,
 )
 
@@ -2913,8 +2995,8 @@ elif st.session_state.page == 6:
 
 elif st.session_state.page == 7:
     st.markdown('<div class="page-banner"><div class="page-title">👤 Profile</div><div class="page-sub">Keep your student profile and study preferences up to date.</div></div>', unsafe_allow_html=True)
-    profile = cursor.execute("SELECT name, email, university, degree, semester, career_goal, skills, study_preferences FROM users WHERE auth_id = ?", (AUTH_ID,)).fetchone()
-    profile = profile or (DISPLAY_NAME, EMAIL, "", "", "", "", "", "")
+    profile = cursor.execute("SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, department, role FROM users WHERE auth_id = ?", (AUTH_ID,)).fetchone()
+    profile = profile or (DISPLAY_NAME, EMAIL, "", "", "", "", "", "", "", USER_ROLE)
 
     p1, p2 = st.columns(2)
     profile_name = p1.text_input("Name", value=profile[0] or DISPLAY_NAME)
@@ -2925,13 +3007,18 @@ elif st.session_state.page == 7:
     p5, p6 = st.columns(2)
     profile_semester = p5.text_input("Current Semester", value=profile[4] or "")
     profile_career = p6.text_input("Career Goal", value=profile[5] or "")
+    p7, p8 = st.columns(2)
+    profile_department = p7.text_input("Department", value=profile[8] or "")
+    profile_role = p8.text_input("Account Role", value=role_display, disabled=True)
     profile_skills = st.text_area("Skills", value=profile[6] or "")
     profile_preferences = st.text_area("Study Preferences", value=profile[7] or "")
 
     save_profile = st.button("💾 Save profile", use_container_width=True)
     if save_profile:
-        cursor.execute("UPDATE users SET name = ?, university = ?, degree = ?, semester = ?, career_goal = ?, skills = ?, study_preferences = ? WHERE auth_id = ?", (profile_name.strip(), profile_university.strip(), profile_degree.strip(), profile_semester.strip(), profile_career.strip(), profile_skills.strip(), profile_preferences.strip(), AUTH_ID))
+        cursor.execute("UPDATE users SET name = ?, university = ?, degree = ?, semester = ?, career_goal = ?, skills = ?, study_preferences = ?, department = ? WHERE auth_id = ?", (profile_name.strip(), profile_university.strip(), profile_degree.strip(), profile_semester.strip(), profile_career.strip(), profile_skills.strip(), profile_preferences.strip(), profile_department.strip(), AUTH_ID))
         conn.commit()
+        st.session_state.department = profile_department.strip()
+        write_audit_log("profile_updated", AUTH_ID, st.session_state.user_role, AUTH_ID, "User updated profile information")
         st.success("Profile saved successfully.")
 
     st.markdown('<div class="panel"><div class="panel-title">🔐 Change password</div><div class="panel-sub">Update your StudySphere password securely.</div></div>', unsafe_allow_html=True)
@@ -2955,6 +3042,7 @@ elif st.session_state.page == 7:
             recovery_salt, recovery_hash = hash_secret(recovery_code)
             cursor.execute("UPDATE users SET password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ? WHERE auth_id = ?", (password_hash, password_salt, recovery_hash, recovery_salt, datetime.now().isoformat(timespec="seconds"), AUTH_ID))
             conn.commit()
+            write_audit_log("password_changed", AUTH_ID, st.session_state.user_role, AUTH_ID, "User changed their password")
             st.success("Password updated successfully.")
             st.info("Your recovery code has been rotated. Save the new code safely.")
             st.code(recovery_code)
@@ -3210,15 +3298,15 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
 
     st.markdown('<div class="panel"><div class="panel-title">👥 User directory</div><div class="panel-sub">Read-only creator access. Passwords, password hashes, recovery codes, and API keys are never shown.</div></div>', unsafe_allow_html=True)
     user_rows = cursor.execute(
-        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, created_at, last_login_at, last_seen_at, password_changed_at FROM users WHERE password_hash IS NOT NULL ORDER BY created_at DESC"
+        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at FROM users WHERE password_hash IS NOT NULL ORDER BY created_at DESC"
     ).fetchall()
     directory_rows = []
     for row in user_rows:
         directory_rows.append({
-            "Name": row[1] or "", "Email": row[2] or "", "University": row[3] or "",
-            "Degree": row[4] or "", "Semester": row[5] or "", "Career goal": row[6] or "",
-            "Skills": row[7] or "", "Joined": row[8] or "", "Last login": row[9] or "Never",
-            "Last active": row[10] or "Never", "Password changed": row[11] or "Unknown",
+            "Name": row[1] or "", "Email": row[2] or "", "Role": {"creator": "Creator", "university_admin": "University Admin", "faculty": "Faculty", "student": "Student"}.get(str(row[9] or "student").lower(), "Student"),
+            "University": row[3] or "", "Department": row[8] or "", "Degree": row[4] or "", "Semester": row[5] or "", "Career goal": row[6] or "",
+            "Skills": row[7] or "", "Joined": row[11] or "", "Last login": row[12] or "Never",
+            "Last active": row[13] or "Never", "Password changed": row[14] or "Unknown",
         })
     if directory_rows:
         st.dataframe(directory_rows, use_container_width=True, hide_index=True)
@@ -3236,7 +3324,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
         selected_user_label = st.selectbox("User", list(user_options.keys()), key="creator_user_selector")
         selected_user_id = user_options[selected_user_label]
         selected = cursor.execute(
-            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, created_at, last_login_at, last_seen_at, password_changed_at, password_hash, password_salt, recovery_hash, recovery_salt FROM users WHERE auth_id = ?",
+            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at, password_hash, password_salt, recovery_hash, recovery_salt FROM users WHERE auth_id = ?",
             (selected_user_id,),
         ).fetchone()
         if selected:
@@ -3251,6 +3339,9 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                 st.write(f"**Career goal:** {selected[5] or '—'}")
                 st.write(f"**Skills:** {selected[6] or '—'}")
                 st.write(f"**Study preferences:** {selected[7] or '—'}")
+                st.write(f"**Department:** {selected[8] or '—'}")
+                st.write(f"**Role:** { {"creator": "Creator", "university_admin": "University Admin", "faculty": "Faculty", "student": "Student"}.get(str(selected[9] or "student").lower(), "Student") }")
+                st.write(f"**Institution:** {institution_name(selected[10])}")
             with u2:
                 st.markdown("#### Activity")
                 counts = {
@@ -3264,18 +3355,18 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                 }
                 for label, value in counts.items():
                     st.write(f"**{label}:** {value}")
-                st.caption(f"Joined: {selected[8] or '—'}")
-                st.caption(f"Last login: {selected[9] or 'Never'}")
-                st.caption(f"Last active: {selected[10] or 'Never'}")
+                st.caption(f"Joined: {selected[11] or '—'}")
+                st.caption(f"Last login: {selected[12] or 'Never'}")
+                st.caption(f"Last active: {selected[13] or 'Never'}")
 
             st.markdown("#### Account security")
             security_col1, security_col2 = st.columns(2)
             with security_col1:
                 st.write("**Password:** Set")
                 st.write("**Storage:** Salted PBKDF2-SHA256")
-                st.write("**Password last changed:** " + (selected[11] or "Unknown"))
+                st.write("**Password last changed:** " + (selected[14] or "Unknown"))
             with security_col2:
-                st.write("**Recovery code:** " + ("Configured" if selected[14] and selected[15] else "Not configured"))
+                st.write("**Recovery code:** " + ("Configured" if selected[17] and selected[18] else "Not configured"))
                 st.write("**Password visibility:** Never displayed")
                 st.caption("The database stores a one-way password hash, not the user's plain-text password. The creator can audit password security without exposing the credential itself.")
 
@@ -3335,6 +3426,49 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                         st.markdown(msg_content)
             else:
                 st.info("No AI conversations stored.")
+
+    st.markdown('<div class="panel"><div class="panel-title">🏫 Institutional setup</div><div class="panel-sub">This is the first foundation for the university edition. The creator can define the institution identity and assign each account a role.</div></div>', unsafe_allow_html=True)
+    institution_row = cursor.execute("SELECT id, name, code FROM institutions WHERE id = ?", (DEFAULT_INSTITUTION_ID,)).fetchone()
+    institution_name_input = st.text_input("Institution name", value=(institution_row[1] if institution_row else "StudySphere University"), key="creator_institution_name")
+    institution_code_input = st.text_input("Institution code", value=(institution_row[2] if institution_row else "SSU"), key="creator_institution_code")
+    if st.button("🏫 Save institution settings", key="save_institution_settings", use_container_width=True):
+        cursor.execute("UPDATE institutions SET name = ?, code = ? WHERE id = ?", (institution_name_input.strip() or "StudySphere University", institution_code_input.strip() or "SSU", DEFAULT_INSTITUTION_ID))
+        conn.commit()
+        write_audit_log("institution_settings_updated", AUTH_ID, "creator", None, "Creator updated institutional identity")
+        st.success("Institution settings saved.")
+
+    if user_options:
+        selected_role = str(selected[9] or "student").lower() if selected else "student"
+        if selected_role == "creator":
+            st.info("The creator role is protected. Use the configured creator email to control the main creator account.")
+        else:
+            role_options = ["student", "faculty", "university_admin"]
+            role_choice = st.selectbox(
+                "Assign role to selected user",
+                role_options,
+                index=role_options.index(selected_role) if selected_role in role_options else 0,
+                format_func=lambda value: {"student": "Student", "faculty": "Faculty", "university_admin": "University Admin"}.get(value, value),
+                key="creator_role_assignment",
+            )
+            department_choice = st.text_input("Assign department", value=(selected[8] or "") if selected else "", key="creator_department_assignment")
+            if st.button("🔐 Save role & department", key="save_role_department", use_container_width=True):
+                cursor.execute("UPDATE users SET role = ?, is_admin = 0, department = ? WHERE auth_id = ?", (role_choice, department_choice.strip(), selected_user_id))
+                conn.commit()
+                write_audit_log("user_role_updated", AUTH_ID, "creator", selected_user_id, f"Assigned role={role_choice}; department={department_choice.strip()}")
+                st.success("User role and department updated.")
+                st.rerun()
+
+    st.markdown('<div class="panel"><div class="panel-title">🧾 Audit log</div><div class="panel-sub">Track important account and administrative actions without exposing passwords or secret values.</div></div>', unsafe_allow_html=True)
+    audit_rows = cursor.execute(
+        "SELECT created_at, actor_role, action, target_user_id, details FROM audit_logs ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+    if audit_rows:
+        audit_view = []
+        for item in audit_rows:
+            audit_view.append({"Time": item[0], "Actor role": item[1] or "—", "Action": item[2], "Target": item[3] or "—", "Details": item[4] or ""})
+        st.dataframe(audit_view, use_container_width=True, hide_index=True)
+    else:
+        st.info("No audit events recorded yet.")
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Creator security</div><div class="ai-title">🔒 Admin access is protected</div><div class="ai-text">Only the creator/admin account can open this page. User profile and academic information can be audited, while plain-text passwords and credential hashes are never displayed because the app stores passwords as salted one-way hashes.</div></div>', unsafe_allow_html=True)
 
