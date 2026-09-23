@@ -229,6 +229,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS course_faculty (course_id TEXT NOT NU
 cursor.execute("CREATE TABLE IF NOT EXISTS course_enrollments (course_id TEXT NOT NULL, user_id TEXT NOT NULL, enrolled_at TEXT NOT NULL, enrolled_by TEXT, PRIMARY KEY(course_id, user_id))")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_assignments (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, due_date TEXT, created_by TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_materials (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, uploader_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, char_count INTEGER DEFAULT 0, uploaded_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, faculty_id TEXT NOT NULL, action_type TEXT NOT NULL, instructions TEXT, output_text TEXT NOT NULL, source_names TEXT, created_at TEXT NOT NULL)")
 conn.commit()
 
 
@@ -1604,6 +1605,117 @@ def retrieve_relevant_course_chunks(user_id, query, top_k=8):
     return candidates[:int(top_k)]
 
 
+
+def course_material_context_for_faculty(course_id, query_text="", top_k=16):
+    """Return only the selected course's stored material as grounded AI context."""
+    rows = cursor.execute(
+        "SELECT id, name, file_type, content_text FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC",
+        (str(course_id),),
+    ).fetchall()
+    if not rows:
+        return "", []
+
+    query_terms = Counter(tokenize_for_rag(query_text)) if query_text else Counter()
+    candidates = []
+    for material_id, name, file_type, content_text in rows:
+        chunks = chunk_document_text(content_text, chunk_words=220, overlap_words=45)
+        for chunk_index, chunk in enumerate(chunks):
+            score = 0.0
+            if query_terms:
+                frequencies = Counter(tokenize_for_rag(chunk))
+                for term, qtf in query_terms.items():
+                    tf = frequencies.get(term, 0)
+                    if tf:
+                        score += min(tf, 4) * qtf
+                label_terms = tokenize_for_rag(name)
+                score += sum(1.5 for term in query_terms if term in label_terms)
+            else:
+                score = 1.0
+            if score > 0 or not query_terms:
+                candidates.append((score, name, file_type, chunk_index, chunk))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[3]))
+    selected = candidates[:int(top_k)]
+    if not selected:
+        return "", []
+
+    source_names = []
+    blocks = []
+    for index, (_score, name, file_type, chunk_index, chunk) in enumerate(selected, start=1):
+        if name not in source_names:
+            source_names.append(name)
+        blocks.append(f"[Course source {index}: {name} | {file_type.upper()} | chunk {chunk_index + 1}]\n{chunk}")
+    return "\n\n".join(blocks), source_names
+
+
+def call_scoped_gemini(api_key, system_text, user_text):
+    """Call Gemini while explicitly restricting the model to supplied institutional context."""
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return "", "Gemini is not configured."
+    models = _available_gemini_generation_models(api_key)
+    errors = []
+    strict_system = (
+        "You are StudySphere Faculty AI. Operate in strict closed-world mode. "
+        "Use ONLY the course information and course-material passages supplied in the request. "
+        "Do not add outside facts, definitions, examples, dates, statistics, policies, or recommendations. "
+        "Do not guess or fill gaps. You may summarize, reorganize, transform, or create assessment material "
+        "strictly from the supplied course context. If the supplied material does not support the request, say "
+        "that the course knowledge base does not contain enough information. Return plain text with clear headings. "
+        + system_text
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": str(user_text)}]}],
+        "systemInstruction": {"parts": [{"text": strict_system}]},
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 5000},
+    }
+    for model in models[:10]:
+        request = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            candidates = data.get("candidates") or []
+            if not candidates:
+                feedback = data.get("promptFeedback") or {}
+                raise ValueError(str(feedback.get("blockReason") or "No candidate returned"))
+            parts = ((candidates[0].get("content") or {}).get("parts") or [])
+            answer = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+            if answer:
+                return answer, ""
+            errors.append(f"{model}: empty response")
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+                parsed = json.loads(detail)
+                message = str(((parsed.get("error") or {}).get("message") or "Gemini request failed.")).strip()
+            except Exception:
+                message = "Gemini request failed."
+            errors.append(f"{model} ({exc.code}): {message}")
+            if exc.code == 429:
+                return "", "Gemini rate limit reached. Please try again shortly."
+            if exc.code in {401, 403}:
+                return "", "Gemini authentication failed. Check the configured API key."
+        except Exception as exc:
+            errors.append(f"{model}: {type(exc).__name__}: {exc}")
+    return "", (errors[-1] if errors else "No Gemini generation model is available.")
+
+
+def faculty_ai_action_label(action):
+    return {
+        "summary": "Course summary",
+        "mcqs": "MCQs",
+        "short_questions": "Short questions",
+        "long_questions": "Long questions",
+        "viva": "Viva questions",
+        "revision": "Revision sheet",
+    }.get(action, str(action).replace("_", " ").title())
+
+
 def university_course_context_for_user(user_id):
     courses = authorized_institution_courses(user_id)
     if not courses:
@@ -2797,6 +2909,7 @@ if st.session_state.is_admin:
     nav_options.append((11, "🔐  Creator Dashboard"))
 if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     nav_options.append((12, "👨‍🏫  Faculty Center"))
+    nav_options.append((15, "🧠  Faculty AI"))
 if st.session_state.user_role in {"university_admin", "creator"}:
     nav_options.append((13, "🏫  University Admin"))
 nav_labels = [item[1] for item in nav_options]
@@ -2806,6 +2919,9 @@ if st.session_state.page == 11 and not st.session_state.is_admin:
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 12 and st.session_state.user_role not in {"faculty", "university_admin", "creator"}:
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 15 and st.session_state.user_role not in {"faculty", "university_admin", "creator"}:
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 13 and st.session_state.user_role not in {"university_admin", "creator"}:
@@ -2841,6 +2957,9 @@ if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     st.sidebar.markdown('<div class="sidebar-label">Teaching</div>', unsafe_allow_html=True)
     if st.sidebar.button("👨‍🏫 Faculty Center", key="faculty_center_sidebar", use_container_width=True):
         st.session_state.page = 12
+        st.rerun()
+    if st.sidebar.button("🧠 Faculty AI", key="faculty_ai_sidebar", use_container_width=True):
+        st.session_state.page = 15
         st.rerun()
 if st.session_state.user_role in {"university_admin", "creator"}:
     st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
@@ -3679,6 +3798,109 @@ elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">👨‍🏫 Faculty workspace is ready</div><div class="ai-text">This step creates the institutional course layer. Faculty can manage course material and course-level assignments without mixing them with a student’s personal records. The next AI layer can safely use only material the institution has authorized for the course.</div></div>', unsafe_allow_html=True)
 
+elif st.session_state.page == 15 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">🧠 Faculty AI</div><div class="page-sub">Create course summaries and assessments using only material stored in your authorized university courses.</div></div>', unsafe_allow_html=True)
+
+    faculty_ai_courses = faculty_courses(AUTH_ID) if st.session_state.user_role == "faculty" else institution_courses_for_admin(DEFAULT_INSTITUTION_ID)
+    if not faculty_ai_courses:
+        st.markdown('<div class="panel"><div class="panel-title">No course available</div><div class="panel-sub">Assign at least one course to this faculty account, then add course material in Faculty Center.</div></div>', unsafe_allow_html=True)
+    else:
+        faculty_ai_course_map = course_name_map(faculty_ai_courses)
+        faculty_ai_course_label = st.selectbox("Course knowledge base", list(faculty_ai_course_map.keys()), key="faculty_ai_course_selector")
+        faculty_ai_course = faculty_ai_course_map[faculty_ai_course_label]
+        faculty_ai_course_id = faculty_ai_course[0]
+        course_material_count_ai = int(cursor.execute("SELECT COUNT(*) FROM course_materials WHERE course_id = ?", (faculty_ai_course_id,)).fetchone()[0] or 0)
+        course_assignment_count_ai = int(cursor.execute("SELECT COUNT(*) FROM course_assignments WHERE course_id = ?", (faculty_ai_course_id,)).fetchone()[0] or 0)
+
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Course materials", course_material_count_ai)
+        f2.metric("Published assignments", course_assignment_count_ai)
+        f3.metric("Course", faculty_ai_course[1])
+
+        if course_material_count_ai == 0:
+            st.warning("This course has no stored teaching material yet. Faculty AI will not generate content without a course knowledge source.")
+        else:
+            ai_action = st.selectbox(
+                "What should Faculty AI create?",
+                ["summary", "mcqs", "short_questions", "long_questions", "viva", "revision"],
+                format_func=faculty_ai_action_label,
+                key="faculty_ai_action",
+            )
+            ai_count = st.number_input("Number of questions/items", min_value=3, max_value=30, value=10, step=1, key="faculty_ai_count")
+            ai_instructions = st.text_area(
+                "Additional course-specific instructions",
+                placeholder="Example: Focus on the normalization section and make the questions suitable for a second-semester class.",
+                key="faculty_ai_instructions",
+            )
+            generate_faculty_ai = st.button("🧠 Generate from course material", key="generate_faculty_ai", use_container_width=True)
+
+            if generate_faculty_ai:
+                action = ai_action
+                action_prompt_map = {
+                    "summary": "Create a structured course summary with key topics, concepts and definitions that are explicitly supported by the stored material.",
+                    "mcqs": f"Create {int(ai_count)} multiple-choice questions. Each must have four options, the correct answer, and a brief explanation. Use only facts explicitly supported by the stored course material.",
+                    "short_questions": f"Create {int(ai_count)} exam-oriented short-answer questions and provide concise answers based only on the stored course material.",
+                    "long_questions": f"Create {int(ai_count)} descriptive/long questions and provide answer outlines using only the stored course material.",
+                    "viva": f"Create {int(ai_count)} viva/oral-exam questions with concise model answers using only the stored course material.",
+                    "revision": "Create a one-page-style revision sheet containing the most important headings, concepts, definitions, formulas or procedures explicitly present in the stored course material.",
+                }
+                request_text = action_prompt_map[action]
+                if ai_instructions.strip():
+                    request_text += "\nAdditional instructions: " + ai_instructions.strip()
+                course_context, source_names = course_material_context_for_faculty(faculty_ai_course_id, ai_instructions.strip() or request_text, top_k=18)
+                if not course_context:
+                    st.error("The selected course does not contain enough matching stored material for this request.")
+                else:
+                    user_text = (
+                        f"Course: {faculty_ai_course[1]}\nCourse code: {faculty_ai_course[2] or '—'}\n"
+                        f"Department: {faculty_ai_course[5] or '—'}\nSemester: {faculty_ai_course[3] or '—'}\n"
+                        f"Task: {request_text}\n\nAUTHORIZED COURSE KNOWLEDGE:\n{course_context}"
+                    )
+                    with st.spinner("🧠 Faculty AI is working from the selected course material..."):
+                        generated_text, error_text = call_scoped_gemini(
+                            GLOBAL_GEMINI_API_KEY,
+                            "This is an institutional faculty workflow. Keep the output directly usable by a teacher and never mention information that is not in the supplied course knowledge.",
+                            user_text,
+                        )
+                    if generated_text:
+                        history_id = f"faculty-ai-{uuid.uuid4().hex}"
+                        cursor.execute(
+                            "INSERT INTO faculty_ai_history (id, course_id, faculty_id, action_type, instructions, output_text, source_names, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (history_id, faculty_ai_course_id, AUTH_ID, action, ai_instructions.strip(), generated_text, json.dumps(source_names), datetime.now().isoformat(timespec="seconds")),
+                        )
+                        conn.commit()
+                        write_audit_log("faculty_ai_generated", AUTH_ID, st.session_state.user_role, None, f"Generated {faculty_ai_action_label(action)} for {faculty_ai_course[1]} using {len(source_names)} stored course sources")
+                        st.session_state.faculty_ai_last_output = generated_text
+                        st.session_state.faculty_ai_last_sources = source_names
+                    else:
+                        st.error(error_text)
+
+            faculty_output = st.session_state.get("faculty_ai_last_output", "")
+            if faculty_output:
+                st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">✅ Generated faculty material</div><div class="panel-sub">This output was generated from the selected course knowledge base only.</div></div>', unsafe_allow_html=True)
+                st.markdown(faculty_output)
+                source_names = st.session_state.get("faculty_ai_last_sources", [])
+                if source_names:
+                    st.markdown("**Sources used:** " + " • ".join(source_names))
+
+            history_rows = cursor.execute(
+                "SELECT action_type, instructions, source_names, created_at, output_text FROM faculty_ai_history WHERE faculty_id = ? AND course_id = ? ORDER BY created_at DESC LIMIT 12",
+                (AUTH_ID, faculty_ai_course_id),
+            ).fetchall()
+            with st.expander("🕘 Faculty AI history", expanded=False):
+                if history_rows:
+                    for idx, history_row in enumerate(history_rows):
+                        st.markdown(f"**{idx + 1}. {faculty_ai_action_label(history_row[0])}** • {history_row[3]}")
+                        if history_row[1]:
+                            st.caption("Instructions: " + history_row[1])
+                        with st.expander("View generated material", expanded=False):
+                            st.markdown(history_row[4])
+                        st.caption("Sources: " + ", ".join(json.loads(history_row[2] or "[]")))
+                else:
+                    st.info("No faculty AI generations for this course yet.")
+
+            st.markdown('<div class="ai-panel"><div class="ai-badge">Strict institutional grounding</div><div class="ai-title">🔐 Faculty AI only uses the selected course knowledge base</div><div class="ai-text">The assistant receives the selected course material and course metadata. It does not receive another teacher’s courses or a student’s private documents. When the stored course material does not support a request, the AI is instructed not to fill the gap with general knowledge.</div></div>', unsafe_allow_html=True)
+
 elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
 
@@ -3829,7 +4051,71 @@ elif st.session_state.page == 13 and st.session_state.user_role in {"university_
         institution_user_rows = cursor.execute("SELECT name, email, role, department, degree, semester, created_at, last_login_at, last_seen_at FROM users WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
     st.dataframe([{"Name": r[0], "Email": r[1], "Role": role_label(r[2]), "Department": r[3] or "—", "Program": r[4] or "—", "Semester": r[5] or "—", "Created": r[6] or "—", "Last login": r[7] or "—", "Last seen": r[8] or "—"} for r in institution_user_rows], use_container_width=True, hide_index=True)
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. The next step can connect these authorized course records to the student experience and grounded AI.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel" style="margin-top:22px;"><div class="panel-title">📊 University analytics</div><div class="panel-sub">Institution-wide operational analytics based on StudySphere activity stored for this university.</div></div>', unsafe_allow_html=True)
+    analytics_dept_rows = cursor.execute("SELECT id, name FROM departments WHERE institution_id = ? ORDER BY name", (institution_id,)).fetchall()
+    analytics_dept_map = {"All departments": None}
+    analytics_dept_map.update({r[1]: r[0] for r in analytics_dept_rows})
+    analytics_dept_choice = st.selectbox("Analytics department", list(analytics_dept_map.keys()), key="admin_analytics_department")
+    analytics_dept_id = analytics_dept_map[analytics_dept_choice]
+
+    if analytics_dept_id:
+        analytics_course_rows = cursor.execute("SELECT id, name, code FROM institution_courses WHERE institution_id = ? AND department_id = ? AND active = 1 ORDER BY name", (institution_id, analytics_dept_id)).fetchall()
+    else:
+        analytics_course_rows = cursor.execute("SELECT id, name, code FROM institution_courses WHERE institution_id = ? AND active = 1 ORDER BY name", (institution_id,)).fetchall()
+    analytics_course_labels = ["All courses"] + [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in analytics_course_rows]
+    analytics_course_choice = st.selectbox("Analytics course", analytics_course_labels, key="admin_analytics_course")
+    analytics_course_id = None
+    if analytics_course_choice != "All courses":
+        analytics_course_id = analytics_course_rows[analytics_course_labels.index(analytics_course_choice) - 1][0]
+
+    if analytics_course_id:
+        enrollment_analytics = cursor.execute("SELECT c.name, COUNT(ce.user_id) FROM institution_courses c LEFT JOIN course_enrollments ce ON ce.course_id = c.id WHERE c.id = ? GROUP BY c.id", (analytics_course_id,)).fetchall()
+        material_analytics = cursor.execute("SELECT c.name, COUNT(cm.id) FROM institution_courses c LEFT JOIN course_materials cm ON cm.course_id = c.id WHERE c.id = ? GROUP BY c.id", (analytics_course_id,)).fetchall()
+        assignment_analytics = cursor.execute("SELECT c.name, COUNT(ca.id) FROM institution_courses c LEFT JOIN course_assignments ca ON ca.course_id = c.id WHERE c.id = ? GROUP BY c.id", (analytics_course_id,)).fetchall()
+        ai_analytics = cursor.execute("SELECT COUNT(*) FROM faculty_ai_history WHERE course_id = ?", (analytics_course_id,)).fetchone()[0] or 0
+        total_enrollments_analytics = int(enrollment_analytics[0][1] if enrollment_analytics else 0)
+        total_materials_analytics = int(material_analytics[0][1] if material_analytics else 0)
+        total_assignments_analytics = int(assignment_analytics[0][1] if assignment_analytics else 0)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Enrolled", total_enrollments_analytics)
+        k2.metric("Materials", total_materials_analytics)
+        k3.metric("Assignments", total_assignments_analytics)
+        k4.metric("Faculty AI runs", int(ai_analytics))
+    else:
+        enrollment_data = []
+        material_data = []
+        assignment_data = []
+        for r in analytics_course_rows:
+            cid = r[0]
+            enrollment_data.append({"Course": r[1], "Enrollments": int(cursor.execute("SELECT COUNT(*) FROM course_enrollments WHERE course_id = ?", (cid,)).fetchone()[0] or 0)})
+            material_data.append({"Course": r[1], "Materials": int(cursor.execute("SELECT COUNT(*) FROM course_materials WHERE course_id = ?", (cid,)).fetchone()[0] or 0)})
+            assignment_data.append({"Course": r[1], "Assignments": int(cursor.execute("SELECT COUNT(*) FROM course_assignments WHERE course_id = ?", (cid,)).fetchone()[0] or 0)})
+        if enrollment_data:
+            st.markdown("**Enrollments by course**")
+            st.bar_chart(enrollment_data, x="Course", y="Enrollments")
+            st.markdown("**Stored teaching material by course**")
+            st.bar_chart(material_data, x="Course", y="Materials")
+            st.markdown("**Published course assignments by course**")
+            st.bar_chart(assignment_data, x="Course", y="Assignments")
+        else:
+            st.info("Create courses to populate university analytics.")
+
+    ai_action_rows = cursor.execute("SELECT action_type, COUNT(*) FROM faculty_ai_history GROUP BY action_type ORDER BY COUNT(*) DESC").fetchall()
+    if ai_action_rows:
+        st.markdown("**Faculty AI usage by action**")
+        st.dataframe([{"AI action": faculty_ai_action_label(r[0]), "Runs": r[1]} for r in ai_action_rows], use_container_width=True, hide_index=True)
+
+    st.markdown("**Recent institutional activity**")
+    recent_activity_rows = cursor.execute(
+        "SELECT created_at, actor_role, action, details FROM audit_logs WHERE actor_user_id IN (SELECT auth_id FROM users WHERE institution_id = ?) ORDER BY id DESC LIMIT 25",
+        (institution_id,),
+    ).fetchall()
+    if recent_activity_rows:
+        st.dataframe([{"Time": r[0], "Role": role_label(r[1]), "Action": r[2], "Details": r[3] or ""} for r in recent_activity_rows], use_container_width=True, hide_index=True)
+    else:
+        st.info("No institutional activity has been recorded yet.")
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. Faculty AI is now grounded in course material, and University Admin has institutional analytics for course activity and AI usage.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 11 and st.session_state.is_admin:
     st.markdown('<div class="page-banner"><div class="page-title">🔐 Creator Dashboard</div><div class="page-sub">Private creator analytics and read-only access to StudySphere user data and activity.</div></div>', unsafe_allow_html=True)
