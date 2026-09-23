@@ -127,7 +127,7 @@ if "reset_recovery_code" not in st.session_state:
 conn = sqlite3.connect("studysphere.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT, password_changed_at TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT, password_changed_at TEXT, role TEXT DEFAULT 'student', institution_id TEXT, department TEXT, auth_provider TEXT DEFAULT 'local', oidc_subject TEXT, last_auth_method TEXT DEFAULT 'local', account_status TEXT DEFAULT 'active')")
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
 cursor.execute("CREATE TABLE IF NOT EXISTS institutions (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id TEXT, actor_role TEXT, action TEXT NOT NULL, target_user_id TEXT, details TEXT, created_at TEXT NOT NULL)")
@@ -176,11 +176,22 @@ if "institution_id" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN institution_id TEXT")
 if "department" not in user_columns:
     cursor.execute("ALTER TABLE users ADD COLUMN department TEXT")
+if "auth_provider" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT DEFAULT 'local'")
+if "oidc_subject" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN oidc_subject TEXT")
+if "last_auth_method" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN last_auth_method TEXT DEFAULT 'local'")
+if "account_status" not in user_columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'active'")
 
 backfill_now = datetime.now().isoformat(timespec="seconds")
 cursor.execute("UPDATE users SET created_at = COALESCE(created_at, ?) WHERE created_at IS NULL OR trim(created_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET last_seen_at = COALESCE(last_seen_at, created_at, ?) WHERE last_seen_at IS NULL OR trim(last_seen_at) = ''", (backfill_now,))
 cursor.execute("UPDATE users SET password_changed_at = COALESCE(password_changed_at, created_at, ?) WHERE password_hash IS NOT NULL AND (password_changed_at IS NULL OR trim(password_changed_at) = '')", (backfill_now,))
+cursor.execute("UPDATE users SET auth_provider = COALESCE(NULLIF(trim(auth_provider), ''), 'local')")
+cursor.execute("UPDATE users SET last_auth_method = COALESCE(NULLIF(trim(last_auth_method), ''), auth_provider, 'local')")
+cursor.execute("UPDATE users SET account_status = COALESCE(NULLIF(trim(account_status), ''), 'active')")
 
 # ============================================================
 # INSTITUTION + AUDIT FOUNDATION
@@ -240,6 +251,53 @@ def role_label(value):
         "faculty": "Faculty",
         "student": "Student",
     }.get(str(value or "student").lower(), "Student")
+
+
+ROLE_PERMISSIONS = {
+    "student": {
+        "view_dashboard", "manage_personal_academics", "view_my_university",
+        "use_ai_agent", "use_presentation_studio", "use_document_converter",
+    },
+    "faculty": {
+        "view_dashboard", "manage_personal_academics", "view_my_university",
+        "use_ai_agent", "use_presentation_studio", "use_document_converter",
+        "manage_faculty_courses", "use_faculty_ai",
+    },
+    "university_admin": {
+        "view_dashboard", "manage_personal_academics", "view_my_university",
+        "use_ai_agent", "use_presentation_studio", "use_document_converter",
+        "manage_faculty_courses", "use_faculty_ai", "manage_university",
+        "view_university_analytics",
+    },
+    "creator": {
+        "view_dashboard", "manage_personal_academics", "view_my_university",
+        "use_ai_agent", "use_presentation_studio", "use_document_converter",
+        "manage_faculty_courses", "use_faculty_ai", "manage_university",
+        "view_university_analytics", "manage_users", "view_audit_logs",
+        "configure_ai", "configure_sso",
+    },
+}
+
+
+def has_permission(permission, role=None):
+    active_role = str(role or st.session_state.get("user_role", "student")).lower()
+    return permission in ROLE_PERMISSIONS.get(active_role, set())
+
+
+def can_access_course(user_id, course_id):
+    row = cursor.execute("SELECT c.institution_id FROM institution_courses c WHERE c.id = ? AND c.active = 1", (str(course_id),)).fetchone()
+    if not row:
+        return False
+    institution_id = str(row[0])
+    role_row = cursor.execute("SELECT role, institution_id FROM users WHERE auth_id = ? AND account_status = 'active'", (str(user_id),)).fetchone()
+    if not role_row or str(role_row[1] or "") != institution_id:
+        return False
+    role = str(role_row[0] or "student").lower()
+    if role in {"creator", "university_admin"}:
+        return True
+    if role == "faculty":
+        return bool(cursor.execute("SELECT 1 FROM course_faculty WHERE course_id = ? AND user_id = ?", (str(course_id), str(user_id))).fetchone())
+    return bool(cursor.execute("SELECT 1 FROM course_enrollments WHERE course_id = ? AND user_id = ?", (str(course_id), str(user_id))).fetchone())
 
 
 def user_institution_id(user_id):
@@ -921,28 +979,30 @@ def valid_email(value):
     return bool(EMAIL_PATTERN.fullmatch(clean_email(value)))
 
 
-def set_authenticated_user(auth_id, name, email):
+def set_authenticated_user(auth_id, name, email, auth_method="local"):
     st.session_state.auth_id = str(auth_id)
     st.session_state.display_name = clean_name(name) or clean_email(email).split("@")[0].title()
     st.session_state.email = clean_email(email)
-    user_row = cursor.execute("SELECT is_admin, role, institution_id, department FROM users WHERE auth_id = ?", (str(auth_id),)).fetchone()
+    user_row = cursor.execute("SELECT is_admin, role, institution_id, department, account_status FROM users WHERE auth_id = ?", (str(auth_id),)).fetchone()
     st.session_state.is_admin = bool(user_row and int(user_row[0] or 0) == 1)
     st.session_state.user_role = str((user_row[1] if user_row else "student") or ("creator" if st.session_state.is_admin else "student")).lower()
     st.session_state.institution_id = str((user_row[2] if user_row and user_row[2] else DEFAULT_INSTITUTION_ID))
     st.session_state.department = str((user_row[3] if user_row and user_row[3] else "") or "")
+    account_status = str((user_row[4] if user_row else "active") or "active").lower()
     if st.session_state.is_admin:
         st.session_state.user_role = "creator"
     now = datetime.now().isoformat(timespec="seconds")
-    cursor.execute("UPDATE users SET last_login_at = ?, last_seen_at = ?, role = ? WHERE auth_id = ?", (now, now, st.session_state.user_role, str(auth_id)))
+    cursor.execute("UPDATE users SET last_login_at = ?, last_seen_at = ?, role = ?, last_auth_method = ? WHERE auth_id = ?", (now, now, st.session_state.user_role, auth_method, str(auth_id)))
     conn.commit()
-    write_audit_log("login", str(auth_id), st.session_state.user_role, str(auth_id), "User signed in")
-    # One application-wide Gemini key is reused for every authenticated user.
+    write_audit_log("login", str(auth_id), st.session_state.user_role, str(auth_id), f"User signed in using {auth_method}")
+    st.session_state.auth_method = auth_method
     st.session_state.ai_api_key = GLOBAL_GEMINI_API_KEY
     st.session_state.ai_messages = []
     st.session_state.active_chat_id = None
     st.session_state.last_rag_sources = []
     st.session_state.page = 1
     st.session_state.show_login = "Sign in"
+    return account_status
 
 
 RAG_STOP_WORDS = {
@@ -1606,8 +1666,10 @@ def retrieve_relevant_course_chunks(user_id, query, top_k=8):
 
 
 
-def course_material_context_for_faculty(course_id, query_text="", top_k=16):
+def course_material_context_for_faculty(course_id, query_text="", top_k=16, user_id=None):
     """Return only the selected course's stored material as grounded AI context."""
+    if user_id is not None and not can_access_course(user_id, course_id):
+        return "", []
     rows = cursor.execute(
         "SELECT id, name, file_type, content_text FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC",
         (str(course_id),),
@@ -2641,6 +2703,7 @@ def clear_authenticated_user():
     st.session_state.user_role = "student"
     st.session_state.institution_id = DEFAULT_INSTITUTION_ID
     st.session_state.department = ""
+    st.session_state.auth_method = "local"
     st.session_state.ai_api_key = ""
     st.session_state.ai_messages = []
     st.session_state.active_chat_id = None
@@ -2652,7 +2715,7 @@ def current_user_from_session():
     if not auth_id:
         return None
     row = cursor.execute(
-        "SELECT auth_id, name, email, is_admin, role, institution_id, department, created_at, last_login_at, last_seen_at FROM users WHERE auth_id = ?",
+        "SELECT auth_id, name, email, is_admin, role, institution_id, department, created_at, last_login_at, last_seen_at, auth_provider, account_status, last_auth_method FROM users WHERE auth_id = ?",
         (auth_id,),
     ).fetchone()
     return row
@@ -2673,6 +2736,74 @@ def migrate_legacy_rows_to_first_local_account(auth_id):
         conn.commit()
 
 
+def university_sso_configured():
+    """Detect an optional Streamlit OIDC provider named `university`."""
+    if not hasattr(st, "login") or not hasattr(st, "user"):
+        return False
+    try:
+        auth_config = st.secrets.get("auth")
+        provider = auth_config.get("university") if auth_config else None
+        return bool(provider and provider.get("client_id") and provider.get("client_secret") and provider.get("server_metadata_url"))
+    except Exception:
+        return False
+
+
+def oidc_identity_dict():
+    try:
+        if not bool(getattr(st.user, "is_logged_in", False)):
+            return {}
+        if hasattr(st.user, "to_dict"):
+            return dict(st.user.to_dict())
+        return dict(st.user)
+    except Exception:
+        return {}
+
+
+def sync_university_sso_user():
+    """Provision or link a StudySphere account from the configured OIDC identity."""
+    claims = oidc_identity_dict()
+    if not claims:
+        return False
+    subject = str(claims.get("sub") or "").strip()
+    issuer = str(claims.get("iss") or "university").strip()
+    email = clean_email(claims.get("email") or claims.get("preferred_username") or "")
+    name = clean_name(claims.get("name") or claims.get("given_name") or email.split("@")[0])
+    if not subject or not valid_email(email):
+        st.error("Your university identity provider did not return a valid email address. Ask university IT to check the SSO configuration.")
+        return "blocked"
+
+    subject_key = f"{issuer}|{subject}"
+    deterministic_id = "oidc-" + hashlib.sha256(subject_key.encode("utf-8")).hexdigest()[:32]
+    # Do not re-provision the same SSO identity on every Streamlit rerun.
+    if st.session_state.get("auth_method") == "university_sso" and st.session_state.get("auth_id"):
+        bound = cursor.execute("SELECT oidc_subject, account_status FROM users WHERE auth_id = ?", (str(st.session_state.get("auth_id")),)).fetchone()
+        if bound and str(bound[0] or "") == subject_key and str(bound[1] or "active").lower() == "active":
+            cursor.execute("UPDATE users SET last_seen_at = ? WHERE auth_id = ?", (datetime.now().isoformat(timespec="seconds"), str(st.session_state.get("auth_id"))))
+            conn.commit()
+            return True
+
+    account = cursor.execute("SELECT auth_id, name, email, role, institution_id, department, account_status FROM users WHERE oidc_subject = ?", (subject_key,)).fetchone()
+    if not account:
+        account = cursor.execute("SELECT auth_id, name, email, role, institution_id, department, account_status FROM users WHERE lower(email) = ?", (email,)).fetchone()
+
+    now = datetime.now().isoformat(timespec="seconds")
+    if account:
+        auth_id = str(account[0])
+        account_status = str(account[6] or "active").lower()
+        if account_status != "active":
+            write_audit_log("blocked_sso_login", auth_id, str(account[3] or "student"), auth_id, f"SSO login blocked because account status is {account_status}")
+            st.error("This StudySphere account is currently disabled. Contact your university administrator.")
+            return "blocked"
+        cursor.execute("UPDATE users SET name = ?, email = ?, oidc_subject = ?, auth_provider = CASE WHEN password_hash IS NOT NULL THEN 'local+oidc' ELSE 'oidc' END, last_auth_method = 'university_sso', last_seen_at = ? WHERE auth_id = ?", (name, email, subject_key, now, auth_id))
+    else:
+        auth_id = deterministic_id
+        cursor.execute("INSERT INTO users (auth_id, name, email, created_at, last_seen_at, role, institution_id, auth_provider, oidc_subject, last_auth_method, account_status) VALUES (?, ?, ?, ?, ?, 'student', ?, 'oidc', ?, 'university_sso', 'active')", (auth_id, name, email, now, now, DEFAULT_INSTITUTION_ID, subject_key))
+        write_audit_log("account_created_sso", auth_id, "student", auth_id, "Account provisioned from university OIDC login")
+    conn.commit()
+    set_authenticated_user(auth_id, name, email, auth_method="university_sso")
+    return True
+
+
 def render_auth_screen():
     st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
     st.markdown(
@@ -2680,6 +2811,12 @@ def render_auth_screen():
         unsafe_allow_html=True,
     )
     st.markdown('<div style="padding:26px 30px 30px;">', unsafe_allow_html=True)
+
+    if university_sso_configured():
+        st.markdown('<div class="panel" style="margin-bottom:18px;"><div class="panel-title">🏫 University SSO</div><div class="panel-sub">Use your institution account. StudySphere receives your identity from the configured OpenID Connect provider and does not handle the university password.</div></div>', unsafe_allow_html=True)
+        if st.button("🏫 Continue with University SSO", key="university_sso_login", use_container_width=True):
+            st.login("university")
+        st.markdown('<div style="text-align:center;color:var(--ss-muted);font-size:12px;margin:8px 0 16px;">or continue with StudySphere local sign-in</div>', unsafe_allow_html=True)
 
     tabs = ["Sign in", "Create account", "Forgot password"]
     tab = st.radio(
@@ -2705,17 +2842,19 @@ def render_auth_screen():
                 st.error("Enter a valid email address.")
             else:
                 account = cursor.execute(
-                    "SELECT auth_id, name, email, password_hash, password_salt FROM users WHERE lower(email) = ?",
+                    "SELECT auth_id, name, email, password_hash, password_salt, account_status, auth_provider FROM users WHERE lower(email) = ?",
                     (email,),
                 ).fetchone()
                 if not account:
                     st.error("No StudySphere account was found for that email.")
+                elif str(account[5] or "active").lower() != "active":
+                    st.error("This account is disabled. Please contact the university administrator.")
                 elif not account[3] or not account[4]:
-                    st.error("This account needs to be created again in the new local authentication system.")
+                    st.info("This account uses University SSO. Use the University SSO button above to sign in.")
                 elif not verify_secret(password, account[4], account[3]):
                     st.error("Incorrect email or password.")
                 else:
-                    set_authenticated_user(account[0], account[1], account[2])
+                    set_authenticated_user(account[0], account[1], account[2], auth_method="local")
                     st.success("Signed in successfully.")
                     st.rerun()
 
@@ -2759,14 +2898,14 @@ def render_auth_screen():
                     try:
                         if existing:
                             cursor.execute(
-                                "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ? WHERE auth_id = ?",
+                                "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ?, auth_provider = CASE WHEN oidc_subject IS NOT NULL THEN 'local+oidc' ELSE 'local' END, account_status = 'active' WHERE auth_id = ?",
                                 (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now if 'now' in locals() else datetime.now().isoformat(timespec="seconds"), auth_id),
                             )
                         else:
                             now = datetime.now().isoformat(timespec="seconds")
                             cursor.execute(
-                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID),
+                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, auth_provider, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID, "local", "active"),
                             )
                         conn.commit()
                         write_audit_log("account_created", auth_id, "student", auth_id, "New local StudySphere account created")
@@ -2828,10 +2967,21 @@ def render_auth_screen():
     st.markdown('</div></div></div>', unsafe_allow_html=True)
 
 
+# Optional university OIDC login is synced into the same local user/role model.
+oidc_sync_result = sync_university_sso_user()
+if oidc_sync_result == "blocked":
+    conn.close()
+    st.stop()
+
 current_user = current_user_from_session()
 
 if not current_user:
     render_auth_screen()
+    conn.close()
+    st.stop()
+
+if str(current_user[11] or "active").lower() != "active":
+    st.error("This account is currently disabled. Contact your StudySphere administrator.")
     conn.close()
     st.stop()
 
@@ -2853,6 +3003,7 @@ st.session_state.is_admin = bool(int(current_user[3] or 0) == 1) if len(current_
 st.session_state.user_role = "creator" if st.session_state.is_admin else USER_ROLE
 st.session_state.institution_id = INSTITUTION_ID
 st.session_state.department = DEPARTMENT
+st.session_state.auth_method = str(current_user[12] or current_user[10] or "local")
 cursor.execute("UPDATE users SET last_seen_at = ? WHERE auth_id = ?", (datetime.now().isoformat(timespec="seconds"), AUTH_ID))
 conn.commit()
 ensure_active_chat(AUTH_ID)
@@ -2886,7 +3037,10 @@ st.sidebar.markdown(
 
 logout = st.sidebar.button("🚪 Sign out", use_container_width=True)
 if logout:
+    logout_method = str(st.session_state.get("auth_method", "local"))
     clear_authenticated_user()
+    if logout_method == "university_sso" and hasattr(st, "logout"):
+        st.logout()
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -2905,26 +3059,26 @@ nav_options = [
     (10, "🔄  Document Converter"),
     (14, "🎓  My University"),
 ]
-if st.session_state.is_admin:
+if has_permission("manage_users"):
     nav_options.append((11, "🔐  Creator Dashboard"))
-if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+if has_permission("manage_faculty_courses"):
     nav_options.append((12, "👨‍🏫  Faculty Center"))
     nav_options.append((15, "🧠  Faculty AI"))
-if st.session_state.user_role in {"university_admin", "creator"}:
+if has_permission("manage_university"):
     nav_options.append((13, "🏫  University Admin"))
 nav_labels = [item[1] for item in nav_options]
 selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
 st.session_state.page = dict((label, page_id) for page_id, label in nav_options)[selected_label]
-if st.session_state.page == 11 and not st.session_state.is_admin:
+if st.session_state.page == 11 and not has_permission("manage_users"):
     st.session_state.page = 1
     st.rerun()
-if st.session_state.page == 12 and st.session_state.user_role not in {"faculty", "university_admin", "creator"}:
+if st.session_state.page == 12 and not has_permission("manage_faculty_courses"):
     st.session_state.page = 1
     st.rerun()
-if st.session_state.page == 15 and st.session_state.user_role not in {"faculty", "university_admin", "creator"}:
+if st.session_state.page == 15 and not has_permission("use_faculty_ai"):
     st.session_state.page = 1
     st.rerun()
-if st.session_state.page == 13 and st.session_state.user_role not in {"university_admin", "creator"}:
+if st.session_state.page == 13 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 
@@ -2948,12 +3102,12 @@ if st.sidebar.button("🔄 Document Converter", key="document_converter_sidebar"
 if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_container_width=True):
     st.session_state.page = 14
     st.rerun()
-if st.session_state.is_admin:
+if has_permission("manage_users"):
     st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
     if st.sidebar.button("🔐 Creator Dashboard", key="creator_dashboard_sidebar", use_container_width=True):
         st.session_state.page = 11
         st.rerun()
-if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
+if has_permission("manage_faculty_courses"):
     st.sidebar.markdown('<div class="sidebar-label">Teaching</div>', unsafe_allow_html=True)
     if st.sidebar.button("👨‍🏫 Faculty Center", key="faculty_center_sidebar", use_container_width=True):
         st.session_state.page = 12
@@ -2961,7 +3115,7 @@ if st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     if st.sidebar.button("🧠 Faculty AI", key="faculty_ai_sidebar", use_container_width=True):
         st.session_state.page = 15
         st.rerun()
-if st.session_state.user_role in {"university_admin", "creator"}:
+if has_permission("manage_university"):
     st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
     if st.sidebar.button("🏫 University Admin", key="university_admin_sidebar", use_container_width=True):
         st.session_state.page = 13
@@ -3847,7 +4001,7 @@ elif st.session_state.page == 15 and st.session_state.user_role in {"faculty", "
                 request_text = action_prompt_map[action]
                 if ai_instructions.strip():
                     request_text += "\nAdditional instructions: " + ai_instructions.strip()
-                course_context, source_names = course_material_context_for_faculty(faculty_ai_course_id, ai_instructions.strip() or request_text, top_k=18)
+                course_context, source_names = course_material_context_for_faculty(faculty_ai_course_id, ai_instructions.strip() or request_text, top_k=18, user_id=AUTH_ID)
                 if not course_context:
                     st.error("The selected course does not contain enough matching stored material for this request.")
                 else:
@@ -4125,7 +4279,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
     active_7d_cutoff = (now_dt.timestamp() - 7 * 86400)
     active_24h_iso = datetime.fromtimestamp(active_24h_cutoff).isoformat(timespec="seconds")
     active_7d_iso = datetime.fromtimestamp(active_7d_cutoff).isoformat(timespec="seconds")
-    total_users = int(cursor.execute("SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0] or 0)
+    total_users = int(cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] or 0)
     active_24h = int(cursor.execute("SELECT COUNT(*) FROM users WHERE last_seen_at >= ?", (active_24h_iso,)).fetchone()[0] or 0)
     active_7d = int(cursor.execute("SELECT COUNT(*) FROM users WHERE last_seen_at >= ?", (active_7d_iso,)).fetchone()[0] or 0)
     total_chat_messages = int(cursor.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] or 0)
@@ -4169,7 +4323,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
 
     st.markdown('<div class="panel"><div class="panel-title">👥 User directory</div><div class="panel-sub">Read-only creator access. Passwords, password hashes, recovery codes, and API keys are never shown.</div></div>', unsafe_allow_html=True)
     user_rows = cursor.execute(
-        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at FROM users WHERE password_hash IS NOT NULL ORDER BY created_at DESC"
+        "SELECT auth_id, name, email, university, degree, semester, career_goal, skills, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at, auth_provider, account_status, last_auth_method FROM users ORDER BY created_at DESC"
     ).fetchall()
     directory_rows = []
     for row in user_rows:
@@ -4178,6 +4332,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
             "University": row[3] or "", "Department": row[8] or "", "Degree": row[4] or "", "Semester": row[5] or "", "Career goal": row[6] or "",
             "Skills": row[7] or "", "Joined": row[11] or "", "Last login": row[12] or "Never",
             "Last active": row[13] or "Never", "Password changed": row[14] or "Unknown",
+            "Auth": row[15] or "local", "Status": row[16] or "active", "Last auth": row[17] or "local",
         })
     if directory_rows:
         st.dataframe(directory_rows, use_container_width=True, hide_index=True)
@@ -4195,7 +4350,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
         selected_user_label = st.selectbox("User", list(user_options.keys()), key="creator_user_selector")
         selected_user_id = user_options[selected_user_label]
         selected = cursor.execute(
-            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at, password_hash, password_salt, recovery_hash, recovery_salt FROM users WHERE auth_id = ?",
+            "SELECT name, email, university, degree, semester, career_goal, skills, study_preferences, department, role, institution_id, created_at, last_login_at, last_seen_at, password_changed_at, password_hash, password_salt, recovery_hash, recovery_salt, auth_provider, account_status, last_auth_method, oidc_subject FROM users WHERE auth_id = ?",
             (selected_user_id,),
         ).fetchone()
         if selected:
@@ -4213,6 +4368,9 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                 st.write(f"**Department:** {selected[8] or '—'}")
                 st.write(f"**Role:** { {"creator": "Creator", "university_admin": "University Admin", "faculty": "Faculty", "student": "Student"}.get(str(selected[9] or "student").lower(), "Student") }")
                 st.write(f"**Institution:** {institution_name(selected[10])}")
+                st.write(f"**Authentication:** {selected[19] or 'local'}")
+                st.write(f"**Account status:** {selected[20] or 'active'}")
+                st.write(f"**Last auth method:** {selected[21] or 'local'}")
             with u2:
                 st.markdown("#### Activity")
                 counts = {
@@ -4328,6 +4486,22 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
                 write_audit_log("user_role_updated", AUTH_ID, "creator", selected_user_id, f"Assigned role={role_choice}; department={department_choice.strip()}")
                 st.success("User role and department updated.")
                 st.rerun()
+
+    if user_options and selected and str(selected[9] or "student").lower() != "creator":
+        status_choice = st.selectbox("Account status", ["active", "disabled"], index=0 if str(selected[20] or "active").lower() == "active" else 1, key="creator_account_status")
+        if st.button("🛡️ Update account status", key="creator_account_status_button", use_container_width=True):
+            cursor.execute("UPDATE users SET account_status = ? WHERE auth_id = ?", (status_choice, selected_user_id))
+            conn.commit()
+            write_audit_log("account_status_updated", AUTH_ID, "creator", selected_user_id, f"Set account status={status_choice}")
+            st.success(f"Account status changed to {status_choice}.")
+            st.rerun()
+
+    st.markdown('<div class="panel"><div class="panel-title">🏫 University SSO</div><div class="panel-sub">Connect StudySphere to the university identity provider using Streamlit OpenID Connect. Client secrets stay in Streamlit Secrets; they are never stored in the SQLite database.</div></div>', unsafe_allow_html=True)
+    if university_sso_configured():
+        st.success("University SSO configuration detected. The login screen now shows the University SSO button.")
+    else:
+        st.info("University SSO is not configured yet. Add the [auth] and [auth.university] settings from the setup file, then redeploy.")
+        st.code('[auth]\nredirect_uri = "https://YOUR-APP.streamlit.app/oauth2callback"\ncookie_secret = "GENERATE-A-LONG-RANDOM-SECRET"\n\n[auth.university]\nclient_id = "YOUR-CLIENT-ID"\nclient_secret = "YOUR-CLIENT-SECRET"\nserver_metadata_url = "https://YOUR-IDENTITY-PROVIDER/.well-known/openid-configuration"', language="toml")
 
     st.markdown('<div class="panel"><div class="panel-title">🧾 Audit log</div><div class="panel-sub">Track important account and administrative actions without exposing passwords or secret values.</div></div>', unsafe_allow_html=True)
     audit_rows = cursor.execute(
