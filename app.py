@@ -7,6 +7,8 @@ import urllib.request
 import hmac
 import os
 import re
+import platform
+import sys
 import secrets
 import time
 import csv
@@ -127,6 +129,9 @@ if "signup_recovery_code" not in st.session_state:
 
 if "reset_recovery_code" not in st.session_state:
     st.session_state.reset_recovery_code = ""
+
+if "step11_package" not in st.session_state:
+    st.session_state.step11_package = None
 
 # ============================================================
 # DATABASE / PRODUCTION FOUNDATION
@@ -475,8 +480,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMA
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 10
-SCHEMA_DESCRIPTION = "Institutional analytics, academic support signals, support cases, and reporting"
+SCHEMA_VERSION = 11
+SCHEMA_DESCRIPTION = "Production deployment readiness, backup/recovery support, and university pilot tooling"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -493,6 +498,213 @@ def database_health():
         return True, database_backend_label()
     except Exception:
         return False, database_backend_label()
+
+
+# ============================================================
+# STEP 11 HELPERS — DEPLOYMENT, BACKUP + UNIVERSITY PILOT
+# ============================================================
+
+STEP11_VERSION = "11.0"
+STEP11_APP_LABEL = "StudySphere Campus"
+
+
+def deployment_secret_status():
+    return {
+        "Gemini API key": bool(GLOBAL_GEMINI_API_KEY),
+        "Database URL": bool(DATABASE_URL),
+        "University SSO": bool(university_sso_configured()) if "university_sso_configured" in globals() else False,
+    }
+
+
+def deployment_preflight_checks():
+    checks = []
+
+    db_ok, db_label = database_health()
+    checks.append({"Check": "Database connectivity", "Status": "PASS" if db_ok else "FAIL", "Details": db_label})
+
+    schema_ok = False
+    schema_detail = "Schema metadata unavailable"
+    try:
+        latest = cursor.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+        latest_version = int(latest[0] or 0) if latest else 0
+        schema_ok = latest_version >= SCHEMA_VERSION
+        schema_detail = f"Current v{latest_version}; expected v{SCHEMA_VERSION}"
+    except Exception as exc:
+        schema_detail = f"Could not inspect schema: {type(exc).__name__}"
+    checks.append({"Check": "Schema version", "Status": "PASS" if schema_ok else "FAIL", "Details": schema_detail})
+
+    if STUDYSPHERE_ENV == "production":
+        production_db_ok = conn.backend == "postgres"
+        checks.append({
+            "Check": "Production database",
+            "Status": "PASS" if production_db_ok else "WARN",
+            "Details": "PostgreSQL active" if production_db_ok else "SQLite fallback detected; use PostgreSQL for a multi-user production deployment.",
+        })
+    else:
+        checks.append({
+            "Check": "Production database",
+            "Status": "INFO",
+            "Details": f"Environment is {STUDYSPHERE_ENV}; SQLite remains supported for development/demo.",
+        })
+
+    storage_ok = False
+    storage_detail = storage_root_path()
+    try:
+        root = storage_root_path()
+        probe = os.path.join(root, ".studysphere_write_test")
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        os.remove(probe)
+        storage_ok = True
+    except Exception as exc:
+        storage_detail = f"Storage is not writable: {type(exc).__name__}"
+    checks.append({"Check": "File storage", "Status": "PASS" if storage_ok else "FAIL", "Details": storage_detail})
+
+    required_modules = {
+        "streamlit": "streamlit",
+        "pypdf": "pypdf",
+        "python-docx": "docx",
+        "reportlab": "reportlab",
+        "python-pptx": "pptx",
+        "Authlib": "authlib",
+    }
+    missing = []
+    for package_name, module_name in required_modules.items():
+        try:
+            __import__(module_name)
+        except Exception:
+            missing.append(package_name)
+    checks.append({
+        "Check": "Application dependencies",
+        "Status": "PASS" if not missing else "FAIL",
+        "Details": "All required modules import successfully" if not missing else "Missing: " + ", ".join(missing),
+    })
+
+    secrets_status = deployment_secret_status()
+    checks.append({
+        "Check": "Gemini AI configuration",
+        "Status": "PASS" if secrets_status["Gemini API key"] else "WARN",
+        "Details": "Configured" if secrets_status["Gemini API key"] else "Not configured; AI features will be unavailable.",
+    })
+    checks.append({
+        "Check": "University SSO",
+        "Status": "PASS" if secrets_status["University SSO"] else "WARN",
+        "Details": "OIDC provider detected" if secrets_status["University SSO"] else "Not configured; local login remains available.",
+    })
+
+    checks.append({
+        "Check": "Backup strategy",
+        "Status": "PASS" if conn.backend == "sqlite" else "INFO",
+        "Details": "Application-level SQLite backup is available" if conn.backend == "sqlite" else "Use PostgreSQL managed backups or pg_dump outside the Streamlit UI.",
+    })
+    return checks
+
+
+def sqlite_backup_bytes():
+    '''Return a logical SQL dump of the current SQLite database.'''
+    if conn.backend != "sqlite":
+        raise RuntimeError("Direct SQLite backup is available only when SQLite is active.")
+    dump_lines = list(conn._conn.iterdump())
+    return ("\n".join(dump_lines) + "\n").encode("utf-8")
+
+
+def deployment_manifest():
+    return {
+        "product": STEP11_APP_LABEL,
+        "release": STEP11_VERSION,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "python": platform.python_version(),
+        "environment": STUDYSPHERE_ENV,
+        "database_backend": database_backend_label(),
+        "schema_version": SCHEMA_VERSION,
+        "features": {
+            "university_sso": bool(university_sso_configured()) if "university_sso_configured" in globals() else False,
+            "gemini": bool(GLOBAL_GEMINI_API_KEY),
+            "oneroster": True,
+            "lti_registration_storage": True,
+            "institutional_analytics": True,
+            "academic_support_queue": True,
+        },
+        "preflight": deployment_preflight_checks(),
+        "secret_values_included": False,
+    }
+
+
+def deployment_bundle_bytes(base_url=""):
+    '''Build a safe deployment/pilot bundle without copying real secrets.'''
+    base_url = str(base_url or "").strip().rstrip("/")
+    bundle = {}
+    app_path = os.path.abspath(__file__)
+    try:
+        with open(app_path, "rb") as handle:
+            bundle["app.py"] = handle.read()
+    except Exception:
+        bundle["app.py"] = b"# StudySphere source unavailable at bundle-generation time.\n"
+
+    bundle["requirements.txt"] = (
+        "streamlit>=1.40,<2\n"
+        "pypdf>=5.0\n"
+        "python-docx>=1.1\n"
+        "reportlab>=4.2\n"
+        "python-pptx>=1.0\n"
+        "Authlib>=1.3.2\n"
+        "psycopg[binary]>=3.2\n"
+    ).encode("utf-8")
+
+    bundle[".env.example"] = (
+        "STUDYSPHERE_ENV=production\n"
+        "# DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/studysphere\n"
+        "# GEMINI_API_KEY=YOUR_GEMINI_API_KEY\n"
+        "STUDYSPHERE_STORAGE_DIR=studysphere_data\n"
+    ).encode("utf-8")
+
+    bundle[".streamlit/config.toml"] = (
+        "[server]\nheadless = true\nenableCORS = true\nmaxUploadSize = 50\n\n[browser]\ngatherUsageStats = false\n"
+    ).encode("utf-8")
+
+    bundle["Dockerfile"] = (
+        "FROM python:3.11-slim\n"
+        "WORKDIR /app\n"
+        "COPY requirements.txt ./\n"
+        "RUN pip install --no-cache-dir -r requirements.txt\n"
+        "COPY app.py ./\n"
+        "ENV STUDYSPHERE_ENV=production\n"
+        "EXPOSE 8501\n"
+        "CMD [\"streamlit\", \"run\", \"app.py\", \"--server.address=0.0.0.0\", \"--server.port=8501\"]\n"
+    ).encode("utf-8")
+
+    launcher_url = base_url or "https://YOUR-APP.streamlit.app"
+    bundle["StudySphereLauncher.py"] = (
+        "import webbrowser\n\n"
+        f"APP_URL = {launcher_url!r}\n"
+        "webbrowser.open(APP_URL)\n"
+    ).encode("utf-8")
+    bundle["StudySphereLauncher.bat"] = b"@echo off\r\npython StudySphereLauncher.py\r\n"
+    bundle["build_windows_launcher.bat"] = (
+        b"@echo off\r\npython -m pip install pyinstaller\r\n"
+        b"pyinstaller --onefile --name StudySphereLauncher StudySphereLauncher.py\r\n"
+    )
+    bundle["DEPLOYMENT_README.md"] = (
+        f"# StudySphere Campus — Step 11\n\nRelease: {STEP11_VERSION}\n\n"
+        "Use PostgreSQL for production, keep secrets in deployment secrets, configure SSO, configure persistent file storage, and set up scheduled database backups.\n\n"
+        "The optional Windows launcher opens the central StudySphere service; it does not create a separate local database.\n"
+    ).encode("utf-8")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in bundle.items():
+            zf.writestr(name, data)
+        zf.writestr("deployment_manifest.json", json.dumps(deployment_manifest(), indent=2).encode("utf-8"))
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def pilot_readiness_summary():
+    checks = deployment_preflight_checks()
+    passed = sum(1 for row in checks if row["Status"] == "PASS")
+    warnings = sum(1 for row in checks if row["Status"] in {"WARN", "INFO"})
+    failed = sum(1 for row in checks if row["Status"] == "FAIL")
+    return passed, warnings, failed
 
 
 # ============================================================
@@ -4563,6 +4775,8 @@ if has_permission("manage_university"):
     nav_options.append((18, "📈  Institutional Analytics"))
 if has_permission("manage_users"):
     nav_options.append((11, "🔐  Creator Dashboard"))
+if st.session_state.user_role == "creator" and st.session_state.is_admin:
+    nav_options.append((19, "🚀  Deployment Center"))
 if has_permission("manage_faculty_courses"):
     nav_options.append((12, "👨‍🏫  Faculty Center"))
     nav_options.append((15, "🧠  Faculty AI"))
@@ -4590,6 +4804,9 @@ if st.session_state.page == 17 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 18 and not has_permission("manage_university"):
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 19 and not (st.session_state.is_admin and st.session_state.user_role == "creator"):
     st.session_state.page = 1
     st.rerun()
 
@@ -6551,6 +6768,97 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
         st.info("No audit events recorded yet.")
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Creator security</div><div class="ai-title">🔒 Admin access is protected</div><div class="ai-text">Only the creator/admin account can open this page. User profile and academic information can be audited, while plain-text passwords and credential hashes are never displayed because the app stores passwords as salted one-way hashes.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 19 and st.session_state.is_admin and st.session_state.user_role == "creator":
+    st.markdown('<div class="page-banner"><div class="page-title">🚀 Deployment Center</div><div class="page-sub">Production readiness, backup/recovery support, and controlled university pilot tooling.</div></div>', unsafe_allow_html=True)
+
+    passed, warnings, failed = pilot_readiness_summary()
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Ready checks", passed)
+    r2.metric("Warnings / info", warnings)
+    r3.metric("Blocking failures", failed)
+    r4.metric("Schema", f"v{SCHEMA_VERSION}")
+
+    if failed == 0:
+        st.success("✅ No blocking deployment checks are currently failing.")
+    else:
+        st.error(f"⚠️ {failed} deployment check(s) need attention before a production pilot.")
+
+    st.markdown('<div class="panel"><div class="panel-title">🩺 Deployment preflight</div><div class="panel-sub">Diagnostics only. API keys, database passwords, and OIDC client secrets are never displayed.</div></div>', unsafe_allow_html=True)
+    st.dataframe(deployment_preflight_checks(), use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🗄️ Backup & recovery</div><div class="panel-sub">SQLite backups can be downloaded here. PostgreSQL production recovery should use managed backups or pg_dump.</div></div>', unsafe_allow_html=True)
+    backup_col, manifest_col = st.columns(2)
+    with backup_col:
+        if conn.backend == "sqlite":
+            try:
+                st.download_button(
+                    "⬇️ Download SQLite backup (SQL)",
+                    data=sqlite_backup_bytes(),
+                    file_name=f"studysphere_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql",
+                    mime="application/sql",
+                    use_container_width=True,
+                    key="step11_sqlite_backup",
+                )
+                st.caption("Point-in-time logical SQL dump of the active SQLite database.")
+            except Exception as exc:
+                st.error(f"Backup could not be generated: {type(exc).__name__}: {exc}")
+        else:
+            st.info("PostgreSQL is active. Use managed database backups or pg_dump for scheduled recovery.")
+    with manifest_col:
+        st.download_button(
+            "⬇️ Download deployment manifest",
+            data=json.dumps(deployment_manifest(), indent=2).encode("utf-8"),
+            file_name="studysphere_deployment_manifest.json",
+            mime="application/json",
+            use_container_width=True,
+            key="step11_manifest_download",
+        )
+        st.caption("Contains diagnostics and feature flags, never secret values.")
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📦 University pilot package</div><div class="panel-sub">Package the current StudySphere app with deployment templates and an optional Windows launcher.</div></div>', unsafe_allow_html=True)
+    pilot_base_url = st.text_input(
+        "StudySphere public URL (optional)",
+        value="",
+        placeholder="https://your-studysphere.streamlit.app",
+        key="step11_pilot_base_url",
+    )
+    if st.button("📦 Build university pilot package", key="step11_build_package", use_container_width=True):
+        try:
+            with st.spinner("Preparing deployment package..."):
+                st.session_state.step11_package = deployment_bundle_bytes(pilot_base_url)
+            st.success("University pilot package created successfully.")
+        except Exception as exc:
+            st.session_state.step11_package = None
+            st.error(f"Package creation failed: {type(exc).__name__}: {exc}")
+
+    if st.session_state.get("step11_package"):
+        st.download_button(
+            "⬇️ Download StudySphere university pilot package",
+            data=st.session_state.step11_package,
+            file_name="StudySphere_Campus_Pilot.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="step11_package_download",
+        )
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🧪 University pilot checklist</div><div class="panel-sub">Validate a small controlled rollout before expanding across the institution.</div></div>', unsafe_allow_html=True)
+    pilot_items = [
+        "Provision one pilot department/program.",
+        "Configure university SSO and verify student/faculty/admin roles.",
+        "Import a small OneRoster dataset and validate courses, sections, and enrollments.",
+        "Upload representative course material and verify grounded AI sources.",
+        "Test Faculty AI and the human-review academic support workflow.",
+        "Verify institutional analytics, audit logs, backups, and recovery procedures.",
+        "Test the responsive experience on a student mobile device.",
+        "Document university support contacts and escalation procedures.",
+    ]
+    st.dataframe([
+        {"Pilot step": idx + 1, "Validation": item}
+        for idx, item in enumerate(pilot_items)
+    ], use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Step 11 • Production + Pilot</div><div class="ai-title">🏫 StudySphere Campus is ready for controlled institutional deployment</div><div class="ai-text">Deployment diagnostics, safe SQLite backup support, production configuration templates, a pilot package, and an optional Windows launcher are now part of the platform. The launcher opens the central service instead of creating a separate local data silo.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 10:
     st.markdown('<div class="page-banner"><div class="page-title">🔄 Document Converter</div><div class="page-sub">Convert your study documents between PDF, DOCX, TXT, and Markdown in one clean workspace.</div></div>', unsafe_allow_html=True)
