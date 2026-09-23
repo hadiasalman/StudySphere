@@ -828,8 +828,120 @@ def _csv_bytes(rows, fieldnames):
     return buffer.getvalue().encode("utf-8")
 
 
+
+def ensure_step9_integration_tables():
+    """Self-heal Step 9 integration tables on existing SQLite deployments.
+
+    Streamlit Cloud can keep an older studysphere.db between deployments.  A
+    CREATE TABLE IF NOT EXISTS statement does not add newly introduced
+    columns to an already-existing table, so this helper both creates missing
+    tables and safely adds any missing columns before integration features run.
+    """
+    table_definitions = [
+        (
+            "integration_configs",
+            "CREATE TABLE IF NOT EXISTS integration_configs ("
+            "id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, "
+            "integration_type TEXT NOT NULL, name TEXT NOT NULL, "
+            "config_json TEXT NOT NULL DEFAULT '{}', active INTEGER DEFAULT 1, "
+            "created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        ),
+        (
+            "integration_sync_runs",
+            "CREATE TABLE IF NOT EXISTS integration_sync_runs ("
+            "id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, direction TEXT NOT NULL, "
+            "status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, "
+            "users_created INTEGER DEFAULT 0, users_updated INTEGER DEFAULT 0, "
+            "courses_created INTEGER DEFAULT 0, courses_updated INTEGER DEFAULT 0, "
+            "sections_created INTEGER DEFAULT 0, enrollments_created INTEGER DEFAULT 0, "
+            "faculty_assignments_created INTEGER DEFAULT 0, message TEXT DEFAULT '')",
+        ),
+        (
+            "integration_external_mappings",
+            "CREATE TABLE IF NOT EXISTS integration_external_mappings ("
+            "id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, integration_type TEXT NOT NULL, "
+            "entity_type TEXT NOT NULL, local_id TEXT NOT NULL, external_id TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, "
+            "UNIQUE(institution_id, integration_type, entity_type, external_id))",
+        ),
+        (
+            "lti_registrations",
+            "CREATE TABLE IF NOT EXISTS lti_registrations ("
+            "id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, platform_name TEXT NOT NULL, "
+            "issuer TEXT NOT NULL, client_id TEXT NOT NULL, deployment_id TEXT, "
+            "authorization_endpoint TEXT, token_endpoint TEXT, jwks_url TEXT, "
+            "active INTEGER DEFAULT 1, created_by TEXT NOT NULL, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, UNIQUE(institution_id, issuer, client_id))",
+        ),
+        (
+            "course_sections",
+            "CREATE TABLE IF NOT EXISTS course_sections ("
+            "id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, "
+            "external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, "
+            "schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        ),
+        (
+            "section_enrollments",
+            "CREATE TABLE IF NOT EXISTS section_enrollments ("
+            "section_id TEXT NOT NULL, user_id TEXT NOT NULL, "
+            "role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'active', "
+            "enrolled_at TEXT NOT NULL, PRIMARY KEY(section_id, user_id, role))",
+        ),
+    ]
+
+    for _, ddl in table_definitions:
+        cursor.execute(ddl)
+
+    # Add missing columns to tables that may already exist from an earlier
+    # deployment.  ALTER TABLE is intentionally limited to known-safe column
+    # definitions; no destructive migrations are performed.
+    column_migrations = {
+        "course_sections": {
+            "external_id": "TEXT",
+            "name": "TEXT",
+            "section_code": "TEXT",
+            "term": "TEXT",
+            "room": "TEXT",
+            "schedule": "TEXT",
+            "capacity": "INTEGER DEFAULT 0",
+            "active": "INTEGER DEFAULT 1",
+            "created_at": "TEXT",
+            "updated_at": "TEXT",
+        },
+        "section_enrollments": {
+            "role": "TEXT DEFAULT 'student'",
+            "status": "TEXT DEFAULT 'active'",
+            "enrolled_at": "TEXT",
+        },
+        "integration_sync_runs": {
+            "users_created": "INTEGER DEFAULT 0",
+            "users_updated": "INTEGER DEFAULT 0",
+            "courses_created": "INTEGER DEFAULT 0",
+            "courses_updated": "INTEGER DEFAULT 0",
+            "sections_created": "INTEGER DEFAULT 0",
+            "enrollments_created": "INTEGER DEFAULT 0",
+            "faculty_assignments_created": "INTEGER DEFAULT 0",
+            "message": "TEXT DEFAULT ''",
+        },
+    }
+
+    for table_name, columns in column_migrations.items():
+        existing_columns = {
+            row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        for column_name, definition in columns.items():
+            if column_name not in existing_columns:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+    conn.commit()
+
+
 def build_oneroster_export_zip(institution_id):
     """Export the StudySphere institutional roster in interoperable OneRoster-style CSV files."""
+    # Self-heal databases created by earlier StudySphere deployments before
+    # touching section/export tables.
+    ensure_step9_integration_tables()
     users = cursor.execute(
         "SELECT auth_id, name, email, role, department FROM users WHERE institution_id = ? ORDER BY name",
         (str(institution_id),),
