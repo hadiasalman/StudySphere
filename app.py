@@ -17,6 +17,7 @@ import uuid
 import zipfile
 from collections import Counter
 from datetime import date, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from pypdf import PdfReader
@@ -2560,6 +2561,139 @@ body div[data-baseweb="popover"] > div {
 
 </style>
 """.replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#7C3AED" if not dark_mode else "#A78BFA").replace("__PRIMARY_HOVER__", "#6D28D9" if not dark_mode else "#8B5CF6").replace("__PRIMARY_SOFT__", "rgba(124,58,237,.10)" if not dark_mode else "rgba(167,139,250,.14)").replace("__ACCENT__", "#F97316" if not dark_mode else "#FB923C").replace("__ACCENT_SOFT__", "rgba(249,115,22,.12)" if not dark_mode else "rgba(251,146,60,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# APPLICATION TIME / GREETING
+# ============================================================
+DEFAULT_APP_TIMEZONE = _config_value("STUDYSPHERE_TIMEZONE", "Asia/Karachi") or "Asia/Karachi"
+
+
+def app_local_now():
+    """Return the StudySphere application time in the configured institution timezone."""
+    try:
+        return datetime.now(ZoneInfo(DEFAULT_APP_TIMEZONE))
+    except (ZoneInfoNotFoundError, ValueError):
+        return datetime.now(ZoneInfo("UTC"))
+
+
+def time_based_greeting(hour):
+    hour = int(hour)
+    if 5 <= hour < 12:
+        return "Good morning"
+    if 12 <= hour < 17:
+        return "Good afternoon"
+    if 17 <= hour < 21:
+        return "Good evening"
+    return "Good night"
+
+
+# Final control contrast layer — applies across the entire app and especially the
+# browser-rendered BaseWeb dropdown portal used by Streamlit.
+control_bg = "#241B33" if st.session_state.dark_mode else "#FFFFFF"
+control_bg_hover = "#302343" if st.session_state.dark_mode else "#F5F2FA"
+control_border = "#514264" if st.session_state.dark_mode else "#D8D0E2"
+control_text = "#F8F4FF" if st.session_state.dark_mode else "#17141C"
+control_accent = "#8B5CF6" if st.session_state.dark_mode else "#7C3AED"
+control_accent_hover = "#A78BFA" if st.session_state.dark_mode else "#6D28D9"
+
+st.markdown(
+    f"""
+<style>
+/* ===== StudySphere global dark-mode controls ===== */
+.stButton > button,
+button[kind="primary"],
+[data-testid="stFormSubmitButton"] > button,
+[data-testid="stDownloadButton"] > button {{
+  background:linear-gradient(135deg,{control_accent},{control_accent_hover}) !important;
+  border:1px solid {control_accent_hover} !important;
+  color:#FFFFFF !important;
+  box-shadow:0 8px 20px rgba(124,58,237,.20) !important;
+}}
+.stButton > button:hover,
+button[kind="primary"]:hover,
+[data-testid="stFormSubmitButton"] > button:hover,
+[data-testid="stDownloadButton"] > button:hover {{
+  background:linear-gradient(135deg,{control_accent_hover},{control_accent}) !important;
+  color:#FFFFFF !important;
+}}
+.stButton > button p,
+.stButton > button span,
+.stButton > button div,
+[data-testid="stFormSubmitButton"] > button p,
+[data-testid="stFormSubmitButton"] > button span,
+[data-testid="stFormSubmitButton"] > button div,
+[data-testid="stDownloadButton"] > button p,
+[data-testid="stDownloadButton"] > button span,
+[data-testid="stDownloadButton"] > button div {{
+  color:#FFFFFF !important;
+}}
+
+/* Selectbox closed state */
+div[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {{
+  background:{control_bg} !important;
+  color:{control_text} !important;
+  border-color:{control_border} !important;
+}}
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] input,
+div[data-baseweb="select"] svg {{
+  color:{control_text} !important;
+  fill:{control_text} !important;
+}}
+
+/* Open dropdown portal — Streamlit/BaseWeb renders this outside the widget tree. */
+div[data-baseweb="popover"] {{
+  z-index:999999 !important;
+}}
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] [role="listbox"],
+div[data-baseweb="popover"] ul {{
+  background:{control_bg} !important;
+  border-color:{control_border} !important;
+  color:{control_text} !important;
+  box-shadow:0 18px 44px rgba(0,0,0,.30) !important;
+}}
+div[data-baseweb="popover"] [role="option"],
+div[data-baseweb="popover"] [role="option"] > div,
+div[data-baseweb="popover"] [role="option"] span,
+div[data-baseweb="popover"] [role="option"] p,
+div[data-baseweb="popover"] li {{
+  background:{control_bg} !important;
+  color:{control_text} !important;
+}}
+div[data-baseweb="popover"] [role="option"]:hover {{
+  background:{control_bg_hover} !important;
+  color:{control_text} !important;
+}}
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] {{
+  background:rgba(139,92,246,.20) !important;
+  color:{control_accent_hover} !important;
+}}
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] span,
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] p,
+div[data-baseweb="popover"] [role="option"][aria-selected="true"] > div {{
+  color:{control_accent_hover} !important;
+}}
+
+/* Number/date/time/text controls in dark mode */
+input, textarea,
+[data-baseweb="input"] > div,
+[data-baseweb="base-input"] > div,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextInput"] input,
+[data-testid="stDateInput"] input,
+[data-testid="stTimeInput"] input {{
+  background:{control_bg} !important;
+  color:{control_text} !important;
+  border-color:{control_border} !important;
+}}
+</style>
+""",
     unsafe_allow_html=True,
 )
 
@@ -5269,7 +5403,11 @@ pending_task_count = cursor.fetchone()[0]
 
 
 if st.session_state.page == 1:
-    today_display = date.today().strftime("%A, %d %B")
+    app_now = app_local_now()
+    today_display = app_now.strftime("%A, %d %B")
+    today_iso = app_now.date().isoformat()
+    local_time_display = app_now.strftime("%I:%M %p")
+    greeting = time_based_greeting(app_now.hour)
     first_name = DISPLAY_NAME.split()[0] if DISPLAY_NAME else "Student"
 
     upcoming_assignments = cursor.execute(
@@ -5293,7 +5431,7 @@ if st.session_state.page == 1:
         f'''<div class="dashboard-hero">
   <div class="dashboard-hero-copy">
     <div class="dashboard-hero-kicker">Student workspace • {today_display}</div>
-    <div class="dashboard-hero-title">Good morning, {first_name}. <span class="accent">Let’s make progress.</span></div>
+    <div class="dashboard-hero-title">{greeting}, {first_name}. <span class="accent">Let’s make progress.</span></div>
     <div class="dashboard-hero-sub">Your study space is ready. Stay on top of deadlines, keep your study tasks moving, and use your academic data to decide what deserves attention next.</div>
     <div class="dashboard-hero-meta">
       <span class="dashboard-pill">📚 {subject_count} subjects</span>
@@ -5303,7 +5441,10 @@ if st.session_state.page == 1:
     </div>
   </div>
   <div class="hero-side">
-    <div class="hero-side-label">Task completion</div>
+    <div class="hero-side-label">Local time</div>
+    <div class="hero-side-number">{local_time_display}</div>
+    <div class="hero-side-caption">{DEFAULT_APP_TIMEZONE.replace("_", " ")} • {today_display}</div>
+    <div class="hero-side-label" style="margin-top:13px;">Task completion</div>
     <div class="hero-side-number">{task_progress}%</div>
     <div class="hero-side-caption">{completed_tasks} completed of {total_tasks} study tasks in your account.</div>
     <div class="hero-side-bar"><div class="hero-side-fill" style="width:{task_progress}%;"></div></div>
