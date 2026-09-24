@@ -444,6 +444,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS institution_courses (id TEXT PRIMARY 
 cursor.execute("CREATE TABLE IF NOT EXISTS course_faculty (course_id TEXT NOT NULL, user_id TEXT NOT NULL, assigned_at TEXT NOT NULL, assigned_by TEXT, PRIMARY KEY(course_id, user_id))")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_enrollments (course_id TEXT NOT NULL, user_id TEXT NOT NULL, enrolled_at TEXT NOT NULL, enrolled_by TEXT, PRIMARY KEY(course_id, user_id))")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_assignments (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, due_date TEXT, created_by TEXT, created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_exams (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, title TEXT NOT NULL, exam_date TEXT NOT NULL, exam_time TEXT DEFAULT '', room TEXT DEFAULT '', description TEXT DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_materials (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, uploader_id TEXT NOT NULL, name TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, char_count INTEGER DEFAULT 0, uploaded_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, faculty_id TEXT NOT NULL, action_type TEXT NOT NULL, instructions TEXT, output_text TEXT NOT NULL, source_names TEXT, created_at TEXT NOT NULL)")
 
@@ -496,8 +497,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMA
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 12
-SCHEMA_DESCRIPTION = "Production deployment readiness, class registration, and attendance management"
+SCHEMA_VERSION = 14
+SCHEMA_DESCRIPTION = "Production deployment readiness, class registration, attendance, faculty exams, and student academic views"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -1856,6 +1857,104 @@ def attendance_export_csv(section_id):
         writer.writerow([row[key] for key in ["Student", "Email", "Present", "Late", "Absent", "Excused", "Marked", "Sessions", "Attendance %"]])
     return buffer.getvalue().encode("utf-8-sig")
 
+
+
+def student_attendance_summary(user_id):
+    """Return attendance summaries only for classes in which this student is registered."""
+    section_rows = cursor.execute(
+        "SELECT s.id, s.name, s.section_code, s.term, c.id, c.name, c.code, se.enrolled_at "
+        "FROM section_enrollments se JOIN course_sections s ON s.id = se.section_id "
+        "JOIN institution_courses c ON c.id = s.course_id "
+        "WHERE se.user_id = ? AND se.role = 'student' AND se.status = 'active' "
+        "AND s.active = 1 AND c.active = 1 ORDER BY c.name, s.name",
+        (str(user_id),),
+    ).fetchall()
+    summaries = []
+    recent_rows = []
+    for section_id, section_name, section_code, term, course_id, course_name, course_code, enrolled_at in section_rows:
+        session_rows = cursor.execute(
+            "SELECT id, attendance_date, topic FROM attendance_sessions WHERE section_id = ? ORDER BY attendance_date DESC",
+            (str(section_id),),
+        ).fetchall()
+        enrolled_date = str(enrolled_at or '')[:10]
+        present = late = absent = excused = marked = 0
+        for session_id, attendance_date, topic in session_rows:
+            if enrolled_date and str(attendance_date) < enrolled_date:
+                continue
+            record = cursor.execute(
+                "SELECT status FROM attendance_records WHERE session_id = ? AND student_id = ?",
+                (str(session_id), str(user_id)),
+            ).fetchone()
+            if not record:
+                continue
+            status = str(record[0] or 'Unmarked')
+            if status == 'Present':
+                present += 1; marked += 1
+            elif status == 'Late':
+                late += 1; marked += 1
+            elif status == 'Absent':
+                absent += 1; marked += 1
+            elif status == 'Excused':
+                excused += 1; marked += 1
+            if len(recent_rows) < 60:
+                recent_rows.append({
+                    'course_id': str(course_id), 'course': course_name, 'class': section_name,
+                    'section_code': section_code or '', 'date': attendance_date,
+                    'topic': topic or '', 'status': status,
+                })
+        percentage = ((present + late) / marked * 100.0) if marked else None
+        summaries.append({
+            'Course': course_name or '—', 'Code': course_code or '—',
+            'Class': section_name or '—', 'Section': section_code or '—',
+            'Sessions': marked, 'Present': present, 'Late': late,
+            'Absent': absent, 'Excused': excused,
+            'Attendance %': round(percentage, 1) if percentage is not None else '—',
+            '_section_id': str(section_id), '_course_id': str(course_id),
+        })
+    recent_rows.sort(key=lambda item: str(item['date']), reverse=True)
+    overall_marked = sum(int(row['Sessions']) for row in summaries)
+    overall_attended = sum(int(row['Present']) + int(row['Late']) for row in summaries)
+    overall_percentage = (overall_attended / overall_marked * 100.0) if overall_marked else None
+    return summaries, recent_rows, overall_percentage
+
+
+def student_university_deadlines(user_id, limit=10):
+    """Return upcoming faculty-published assignments and exams for authorized courses."""
+    courses = authorized_institution_courses(user_id)
+    if not courses:
+        return []
+    course_ids = [str(row[0]) for row in courses]
+    placeholders = ','.join('?' for _ in course_ids)
+    course_names = {str(row[0]): (row[1], row[2] or '') for row in courses}
+    today_value = str(date.today())
+    assignment_rows = cursor.execute(
+        f"SELECT course_id, title, due_date FROM course_assignments WHERE course_id IN ({placeholders}) AND due_date >= ? ORDER BY due_date LIMIT ?",
+        (*course_ids, today_value, int(limit)),
+    ).fetchall()
+    exam_rows = cursor.execute(
+        f"SELECT course_id, title, exam_date FROM course_exams WHERE course_id IN ({placeholders}) AND exam_date >= ? ORDER BY exam_date LIMIT ?",
+        (*course_ids, today_value, int(limit)),
+    ).fetchall()
+    items = []
+    for course_id, title, due_date in assignment_rows:
+        cname, ccode = course_names.get(str(course_id), ('Course', ''))
+        items.append(('Assignment', str(title), str(due_date), cname, ccode))
+    for course_id, title, exam_date in exam_rows:
+        cname, ccode = course_names.get(str(course_id), ('Course', ''))
+        items.append(('Exam', str(title), str(exam_date), cname, ccode))
+    items.sort(key=lambda item: (item[2], item[0], item[1]))
+    return items[:int(limit)]
+
+
+def student_course_exam_rows(user_id, course_id):
+    """Return exams only for a course this student is authorized to access."""
+    authorized_ids = {str(row[0]) for row in authorized_institution_courses(user_id)}
+    if str(course_id) not in authorized_ids:
+        return []
+    return cursor.execute(
+        "SELECT id, title, exam_date, exam_time, room, description FROM course_exams WHERE course_id = ? ORDER BY exam_date, exam_time, title",
+        (str(course_id),),
+    ).fetchall()
 
 def attendance_class_template_csv():
     return "email\nstudent1@university.edu\nstudent2@university.edu\n".encode("utf-8")
@@ -3578,6 +3677,10 @@ def university_course_context_for_user(user_id):
             "SELECT title, due_date, description FROM course_assignments WHERE course_id = ? ORDER BY due_date LIMIT 12",
             (course_id,),
         ).fetchall()
+        exam_rows = cursor.execute(
+            "SELECT title, exam_date, exam_time, room, description FROM course_exams WHERE course_id = ? ORDER BY exam_date, exam_time LIMIT 12",
+            (course_id,),
+        ).fetchall()
         material_rows = cursor.execute(
             "SELECT name, file_type, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC LIMIT 20",
             (course_id,),
@@ -3591,6 +3694,7 @@ def university_course_context_for_user(user_id):
             "credits": credits,
             "description": description or "",
             "course_assignments": assignment_rows,
+            "course_exams": exam_rows,
             "course_materials": material_rows,
         })
     return {"authorized_university_courses": course_items}
@@ -5045,6 +5149,8 @@ nav_options = [
     (14, "🎓  My University"),
     (16, "🏛️  University Knowledge AI"),
 ]
+if st.session_state.user_role == "student":
+    nav_options.append((20, "📊  My Attendance"))
 if has_permission("manage_university"):
     nav_options.append((17, "🔗  Integration Center"))
     nav_options.append((18, "📈  Institutional Analytics"))
@@ -5073,6 +5179,9 @@ if st.session_state.page == 13 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 16 and not has_permission("use_ai_agent"):
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 20 and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 17 and not has_permission("manage_university"):
@@ -5104,6 +5213,9 @@ if st.sidebar.button("🔄 Document Converter", key="document_converter_sidebar"
     st.rerun()
 if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_container_width=True):
     st.session_state.page = 14
+    st.rerun()
+if st.session_state.user_role == "student" and st.sidebar.button("📊 My Attendance", key="my_attendance_sidebar", use_container_width=True):
+    st.session_state.page = 20
     st.rerun()
 if st.sidebar.button("🏛️ University Knowledge AI", key="university_knowledge_sidebar", use_container_width=True):
     st.session_state.page = 16
@@ -5274,6 +5386,33 @@ if st.session_state.page == 1:
         exam_html += '<div class="dashboard-empty">No upcoming exams have been added yet.</div>'
     exam_html += '</div></div>'
     st.markdown(exam_html, unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    university_deadlines = student_university_deadlines(AUTH_ID, limit=10)
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">University schedule</div><div class="section-sub">Faculty-published assignments and exams from your authorized university courses.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
+    uni_assignment_html = '<div class="radar-card"><div class="panel-title">📝 Course assignments</div><div class="panel-sub">Deadlines published by your faculty.</div><div class="radar-list">'
+    uni_exam_html = '<div class="radar-card"><div class="panel-title">🎯 Course exams</div><div class="panel-sub">Exams scheduled by your faculty.</div><div class="radar-list">'
+    has_uni_assignment = False
+    has_uni_exam = False
+    for kind_value, title_value, due_value, course_value, code_value in university_deadlines:
+        try:
+            dt_value = datetime.strptime(str(due_value), "%Y-%m-%d").date()
+            day_value = dt_value.strftime("%d")
+            month_value = dt_value.strftime("%b")
+        except Exception:
+            day_value = "—"; month_value = "—"
+        row_html = f'<div class="radar-item"><div class="radar-date"><div class="radar-day">{day_value}</div><div class="radar-month">{month_value}</div></div><div class="radar-main"><div class="radar-name">{title_value}</div><div class="radar-meta">{course_value}{(" • " + code_value) if code_value else ""}</div></div></div>'
+        if kind_value == "Assignment":
+            uni_assignment_html += row_html; has_uni_assignment = True
+        else:
+            uni_exam_html += row_html; has_uni_exam = True
+    if not has_uni_assignment:
+        uni_assignment_html += '<div class="dashboard-empty">No faculty-published course assignments are due yet.</div>'
+    if not has_uni_exam:
+        uni_exam_html += '<div class="dashboard-empty">No faculty-published course exams are scheduled yet.</div>'
+    uni_assignment_html += '</div></div>'; uni_exam_html += '</div></div>'
+    st.markdown(uni_assignment_html, unsafe_allow_html=True)
+    st.markdown(uni_exam_html, unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="ai-cta"><div class="ai-cta-copy"><div class="ai-cta-title">🤖 StudySphere AI is ready</div><div class="ai-cta-sub">Ask questions naturally, understand difficult topics, review your workload, or turn your stored academic data into a focused plan.</div></div><div class="ai-cta-badge">Gemini powered</div></div>', unsafe_allow_html=True)
@@ -6056,7 +6195,42 @@ elif st.session_state.page == 14:
         else:
             st.info("No course-level assignments have been published yet.")
 
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🎯 Course exam schedule</div><div class="panel-sub">Exams scheduled by faculty for this course.</div></div>', unsafe_allow_html=True)
+        student_exam_rows = student_course_exam_rows(AUTH_ID, selected_course_id)
+        if student_exam_rows:
+            st.dataframe([{"Exam": row[1], "Date": row[2], "Time": row[3] or "—", "Room": row[4] or "—", "Details": row[5] or ""} for row in student_exam_rows], use_container_width=True, hide_index=True)
+        else:
+            st.info("No faculty-published exams are scheduled for this course yet.")
+
         st.markdown('<div class="ai-panel"><div class="ai-badge">Grounded AI</div><div class="ai-title">🧠 What the AI can use here</div><div class="ai-text">Your AI Agent can use your profile, personal academic records, your uploaded documents, and the courses/material authorized for this account. It will not use an unrelated university course simply because it exists in the database.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 20 and st.session_state.user_role == "student":
+    st.markdown('<div class="page-banner"><div class="page-title">📊 My Attendance</div><div class="page-sub">View attendance across the classes registered to your StudySphere account.</div></div>', unsafe_allow_html=True)
+    attendance_summaries, attendance_recent, overall_attendance = student_attendance_summary(AUTH_ID)
+    marked_total = sum(int(row["Sessions"]) for row in attendance_summaries)
+    present_total = sum(int(row["Present"]) for row in attendance_summaries)
+    late_total = sum(int(row["Late"]) for row in attendance_summaries)
+    absent_total = sum(int(row["Absent"]) for row in attendance_summaries)
+    x1, x2, x3, x4 = st.columns(4)
+    x1.metric("Overall attendance", f"{overall_attendance:.1f}%" if overall_attendance is not None else "—")
+    x2.metric("Sessions marked", marked_total)
+    x3.metric("Present + Late", present_total + late_total)
+    x4.metric("Absent", absent_total)
+    if not attendance_summaries:
+        st.markdown('<div class="panel"><div class="panel-title">📭 No attendance records yet</div><div class="panel-sub">Your attendance will appear here after a faculty member registers you in a class and records an attendance session.</div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📚 Attendance by class</div><div class="panel-sub">Present and Late count as attended. Excused is displayed separately.</div></div>', unsafe_allow_html=True)
+        st.dataframe([{key: value for key, value in row.items() if not key.startswith("_")} for row in attendance_summaries], use_container_width=True, hide_index=True)
+        attendance_labels = [f"{row['Course']} • {row['Class']}" for row in attendance_summaries]
+        chosen_attendance_label = st.selectbox("Attendance history", attendance_labels, key="student_attendance_history_selector")
+        chosen_attendance_row = attendance_summaries[attendance_labels.index(chosen_attendance_label)]
+        recent_for_selected = [item for item in attendance_recent if item['course_id'] == chosen_attendance_row['_course_id'] and item['class'] == chosen_attendance_row['Class']]
+        if recent_for_selected:
+            st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🗓️ Session history</div><div class="panel-sub">Your attendance status for each recorded class session.</div></div>', unsafe_allow_html=True)
+            st.dataframe([{"Date": item['date'], "Topic": item['topic'] or "—", "Status": item['status']} for item in recent_for_selected], use_container_width=True, hide_index=True)
+        else:
+            st.info("No marked sessions are available for this class yet.")
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Private student record</div><div class="ai-title">🔐 Attendance is linked to your registered classes</div><div class="ai-text">You can see only attendance records associated with your StudySphere account. Faculty manage attendance for their assigned classes.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">👨‍🏫 Faculty Center</div><div class="page-sub">Manage courses, teaching material, class rosters, assignments and attendance from one teaching workspace.</div></div>', unsafe_allow_html=True)
@@ -6092,7 +6266,7 @@ elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "
         overview_left.markdown(f"**Course:** {selected_course[1]}<br>**Code:** {selected_course[2] or '—'}<br>**Department:** {selected_course[5] or '—'}", unsafe_allow_html=True)
         overview_right.markdown(f"**Semester:** {selected_course[3] or '—'}<br>**Credits:** {selected_course[4] or '—'}<br>**Description:** {cursor.execute('SELECT description FROM institution_courses WHERE id = ?', (selected_course_id,)).fetchone()[0] or '—'}", unsafe_allow_html=True)
 
-        class_tab, material_tab, assignment_tab, attendance_tab = st.tabs(["🏫 Class & Roster", "📚 Teaching Material", "📝 Assignments", "📅 Attendance"])
+        class_tab, material_tab, assignment_tab, exam_tab, attendance_tab = st.tabs(["🏫 Class & Roster", "📚 Teaching Material", "📝 Assignments", "🎯 Exams", "📅 Attendance"])
 
         with class_tab:
             st.markdown('<div class="panel"><div class="panel-title">🏫 Create a class / section</div><div class="panel-sub">Create a class group inside this course, then register the students who belong to that class.</div></div>', unsafe_allow_html=True)
@@ -6256,6 +6430,39 @@ elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "
                 st.dataframe([{"Assignment": r[0], "Due date": r[1], "Description": r[2] or "", "Created": r[3]} for r in course_assignments], use_container_width=True, hide_index=True)
             else:
                 st.info("No course-level assignments have been published yet.")
+
+        with exam_tab:
+            st.markdown('<div class="panel"><div class="panel-title">🎯 Schedule course exam</div><div class="panel-sub">Publish an exam for students enrolled in this course. It will appear on their dashboard and My University page.</div></div>', unsafe_allow_html=True)
+            ex1, ex2 = st.columns(2)
+            course_exam_title = ex1.text_input("Exam title", key=f"faculty_exam_title_{selected_course_id}", placeholder="e.g. Midterm Examination")
+            course_exam_date = ex2.date_input("Exam date", key=f"faculty_exam_date_{selected_course_id}", value=date.today())
+            ex3, ex4 = st.columns(2)
+            course_exam_time = ex3.text_input("Exam time", key=f"faculty_exam_time_{selected_course_id}", placeholder="e.g. 10:00 AM")
+            course_exam_room = ex4.text_input("Room / venue", key=f"faculty_exam_room_{selected_course_id}", placeholder="e.g. Hall B")
+            course_exam_description = st.text_area("Exam details", key=f"faculty_exam_description_{selected_course_id}", placeholder="Topics, instructions, or other information for students.")
+            schedule_course_exam = st.button("📅 Publish exam schedule", key=f"publish_course_exam_{selected_course_id}", use_container_width=True)
+            if schedule_course_exam:
+                if not course_exam_title.strip():
+                    st.error("Enter an exam title.")
+                else:
+                    cursor.execute(
+                        "INSERT INTO course_exams (id, course_id, title, exam_date, exam_time, room, description, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (f"course-exam-{uuid.uuid4().hex}", selected_course_id, course_exam_title.strip(), str(course_exam_date), course_exam_time.strip(), course_exam_room.strip(), course_exam_description.strip(), AUTH_ID, datetime.now().isoformat(timespec='seconds')),
+                    )
+                    conn.commit()
+                    write_audit_log("course_exam_created", AUTH_ID, st.session_state.user_role, None, f"Scheduled exam '{course_exam_title.strip()}' for course {selected_course[1]} on {course_exam_date}")
+                    st.success("Exam schedule published to enrolled students.")
+                    st.rerun()
+
+            st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📋 Current course exam schedule</div><div class="panel-sub">Upcoming and previously scheduled exams for this course.</div></div>', unsafe_allow_html=True)
+            course_exam_rows = cursor.execute(
+                "SELECT title, exam_date, exam_time, room, description, created_at FROM course_exams WHERE course_id = ? ORDER BY exam_date, exam_time, title",
+                (selected_course_id,),
+            ).fetchall()
+            if course_exam_rows:
+                st.dataframe([{"Exam": r[0], "Date": r[1], "Time": r[2] or "—", "Room": r[3] or "—", "Details": r[4] or "", "Created": r[5]} for r in course_exam_rows], use_container_width=True, hide_index=True)
+            else:
+                st.info("No course exams have been scheduled yet.")
 
         with attendance_tab:
             st.markdown('<div class="panel"><div class="panel-title">📅 Class Attendance</div><div class="panel-sub">Take daily attendance for a selected class. Attendance records are stored separately from course enrollment.</div></div>', unsafe_allow_html=True)
