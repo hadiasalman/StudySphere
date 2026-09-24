@@ -466,10 +466,24 @@ cursor.execute("CREATE TABLE IF NOT EXISTS integration_configs (id TEXT PRIMARY 
 cursor.execute("CREATE TABLE IF NOT EXISTS integration_sync_runs (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, direction TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, users_created INTEGER DEFAULT 0, users_updated INTEGER DEFAULT 0, courses_created INTEGER DEFAULT 0, courses_updated INTEGER DEFAULT 0, sections_created INTEGER DEFAULT 0, enrollments_created INTEGER DEFAULT 0, faculty_assignments_created INTEGER DEFAULT 0, message TEXT DEFAULT '')")
 cursor.execute("CREATE TABLE IF NOT EXISTS integration_external_mappings (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, integration_type TEXT NOT NULL, entity_type TEXT NOT NULL, local_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(institution_id, integration_type, entity_type, external_id))")
 cursor.execute("CREATE TABLE IF NOT EXISTS lti_registrations (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, platform_name TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL, deployment_id TEXT, authorization_endpoint TEXT, token_endpoint TEXT, jwks_url TEXT, active INTEGER DEFAULT 1, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(institution_id, issuer, client_id))")
-cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, external_id TEXT, name TEXT NOT NULL, section_name TEXT DEFAULT '', section_code TEXT, term TEXT, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS section_enrollments (section_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'active', enrolled_at TEXT NOT NULL, PRIMARY KEY(section_id, user_id, role))")
 cursor.execute("CREATE TABLE IF NOT EXISTS attendance_sessions (id TEXT PRIMARY KEY, section_id TEXT NOT NULL, attendance_date TEXT NOT NULL, topic TEXT DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(section_id, attendance_date))")
 cursor.execute("CREATE TABLE IF NOT EXISTS attendance_records (session_id TEXT NOT NULL, student_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Present', marked_at TEXT NOT NULL, marked_by TEXT NOT NULL, PRIMARY KEY(session_id, student_id))")
+
+# Compatibility for older StudySphere databases that used section_name instead
+# of (or in addition to) the newer name column. Keep both values synchronized
+# so class creation works without deleting or resetting existing data.
+_course_section_columns = {row[1] for row in cursor.execute("PRAGMA table_info(course_sections)").fetchall()}
+if "name" not in _course_section_columns:
+    cursor.execute("ALTER TABLE course_sections ADD COLUMN name TEXT")
+    _course_section_columns.add("name")
+if "section_name" not in _course_section_columns:
+    cursor.execute("ALTER TABLE course_sections ADD COLUMN section_name TEXT DEFAULT ''")
+    _course_section_columns.add("section_name")
+cursor.execute("UPDATE course_sections SET name = section_name WHERE (name IS NULL OR trim(name) = '') AND section_name IS NOT NULL AND trim(section_name) <> ''")
+cursor.execute("UPDATE course_sections SET section_name = name WHERE (section_name IS NULL OR trim(section_name) = '') AND name IS NOT NULL AND trim(name) <> ''")
+conn.commit()
 
 # ============================================================
 # INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT (STEP 10)
@@ -1134,15 +1148,15 @@ def _find_or_create_section_from_oneroster(row, institution_id, course_id):
     now = datetime.now().isoformat(timespec="seconds")
     if local_id:
         cursor.execute(
-            "UPDATE course_sections SET course_id = ?, name = ?, section_code = ?, term = ?, room = ?, schedule = ?, capacity = ?, active = 1, updated_at = ? WHERE id = ? AND institution_id = ?",
-            (str(course_id), name, section_code, term, room, schedule, capacity, now, local_id, str(institution_id)),
+            "UPDATE course_sections SET course_id = ?, name = ?, section_name = ?, section_code = ?, term = ?, room = ?, schedule = ?, capacity = ?, active = 1, updated_at = ? WHERE id = ? AND institution_id = ?",
+            (str(course_id), name, name, section_code, term, room, schedule, capacity, now, local_id, str(institution_id)),
         )
         created = False
     else:
         local_id = f"section-{uuid.uuid4().hex}"
         cursor.execute(
-            "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-            (local_id, str(institution_id), str(course_id), external_id, name, section_code, term, room, schedule, capacity, now, now),
+            "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (local_id, str(institution_id), str(course_id), external_id, name, name, section_code, term, room, schedule, capacity, now, now),
         )
         created = True
     if external_id:
@@ -1314,7 +1328,7 @@ def ensure_step9_integration_tables():
             "course_sections",
             "CREATE TABLE IF NOT EXISTS course_sections ("
             "id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, "
-            "external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, "
+            "external_id TEXT, name TEXT NOT NULL, section_name TEXT DEFAULT '', section_code TEXT, term TEXT, room TEXT, "
             "schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, "
             "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
         ),
@@ -1337,6 +1351,7 @@ def ensure_step9_integration_tables():
         "course_sections": {
             "external_id": "TEXT",
             "name": "TEXT",
+            "section_name": "TEXT DEFAULT ''",
             "section_code": "TEXT",
             "term": "TEXT",
             "room": "TEXT",
@@ -1635,8 +1650,8 @@ def create_faculty_class(user_id, course_id, class_name, section_code, term, roo
     now = datetime.now().isoformat(timespec="seconds")
     section_id = f"section-{uuid.uuid4().hex}"
     cursor.execute(
-        "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-        (section_id, str(course_row[0]), str(course_id), class_name, str(section_code or "").strip(), str(term or "").strip(), str(room or "").strip(), str(schedule or "").strip(), max(0, int(capacity or 0)), now, now),
+        "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        (section_id, str(course_row[0]), str(course_id), class_name, class_name, str(section_code or "").strip(), str(term or "").strip(), str(room or "").strip(), str(schedule or "").strip(), max(0, int(capacity or 0)), now, now),
     )
     conn.commit()
     write_audit_log("faculty_class_created", user_id, st.session_state.get("user_role", "faculty"), None, f"Created class {class_name} for course {course_id}")
