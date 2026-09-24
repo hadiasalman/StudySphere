@@ -468,6 +468,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS integration_external_mappings (id TEX
 cursor.execute("CREATE TABLE IF NOT EXISTS lti_registrations (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, platform_name TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL, deployment_id TEXT, authorization_endpoint TEXT, token_endpoint TEXT, jwks_url TEXT, active INTEGER DEFAULT 1, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(institution_id, issuer, client_id))")
 cursor.execute("CREATE TABLE IF NOT EXISTS course_sections (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, course_id TEXT NOT NULL, external_id TEXT, name TEXT NOT NULL, section_code TEXT, term TEXT, room TEXT, schedule TEXT, capacity INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS section_enrollments (section_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'active', enrolled_at TEXT NOT NULL, PRIMARY KEY(section_id, user_id, role))")
+cursor.execute("CREATE TABLE IF NOT EXISTS attendance_sessions (id TEXT PRIMARY KEY, section_id TEXT NOT NULL, attendance_date TEXT NOT NULL, topic TEXT DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(section_id, attendance_date))")
+cursor.execute("CREATE TABLE IF NOT EXISTS attendance_records (session_id TEXT NOT NULL, student_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Present', marked_at TEXT NOT NULL, marked_by TEXT NOT NULL, PRIMARY KEY(session_id, student_id))")
 
 # ============================================================
 # INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT (STEP 10)
@@ -480,8 +482,8 @@ cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMA
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 11
-SCHEMA_DESCRIPTION = "Production deployment readiness, backup/recovery support, and university pilot tooling"
+SCHEMA_VERSION = 12
+SCHEMA_DESCRIPTION = "Production deployment readiness, class registration, and attendance management"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -504,7 +506,7 @@ def database_health():
 # STEP 11 HELPERS — DEPLOYMENT, BACKUP + UNIVERSITY PILOT
 # ============================================================
 
-STEP11_VERSION = "11.0"
+STEP11_VERSION = "12.0"
 STEP11_APP_LABEL = "StudySphere Campus"
 
 
@@ -624,6 +626,8 @@ def deployment_manifest():
             "lti_registration_storage": True,
             "institutional_analytics": True,
             "academic_support_queue": True,
+            "class_registration": True,
+            "attendance_tracking": True,
         },
         "preflight": deployment_preflight_checks(),
         "secret_values_included": False,
@@ -1584,6 +1588,262 @@ def institution_courses_for_admin(institution_id):
 
 def course_name_map(course_rows):
     return {f"{row[1]}" + (f" ({row[2]})" if row[2] else ""): row for row in course_rows}
+
+
+def faculty_sections_for_course(user_id, course_id):
+    """Return active classes/sections for a course the current faculty user may manage."""
+    if not can_access_course(user_id, course_id):
+        return []
+    return cursor.execute(
+        "SELECT s.id, s.name, s.section_code, s.term, s.room, s.schedule, s.capacity, s.active, c.name, c.code "
+        "FROM course_sections s JOIN institution_courses c ON c.id = s.course_id "
+        "WHERE s.course_id = ? AND s.active = 1 ORDER BY s.name",
+        (str(course_id),),
+    ).fetchall()
+
+
+def can_manage_section(user_id, section_id):
+    row = cursor.execute("SELECT course_id FROM course_sections WHERE id = ? AND active = 1", (str(section_id),)).fetchone()
+    return bool(row and can_access_course(user_id, row[0]))
+
+
+def section_roster(section_id, active_only=True):
+    status_filter = " AND se.status = 'active'" if active_only else ""
+    return cursor.execute(
+        "SELECT u.auth_id, u.name, u.email, u.degree, u.semester, se.enrolled_at, se.status "
+        "FROM section_enrollments se JOIN users u ON u.auth_id = se.user_id "
+        "WHERE se.section_id = ? AND se.role = 'student'" + status_filter + " ORDER BY u.name",
+        (str(section_id),),
+    ).fetchall()
+
+
+def create_faculty_class(user_id, course_id, class_name, section_code, term, room, schedule, capacity):
+    if not can_access_course(user_id, course_id):
+        raise PermissionError("You are not authorized to create a class for this course.")
+    class_name = clean_name(class_name)
+    if not class_name:
+        raise ValueError("Enter a class name.")
+    duplicate = cursor.execute(
+        "SELECT id FROM course_sections WHERE course_id = ? AND lower(name) = lower(?) AND active = 1",
+        (str(course_id), class_name),
+    ).fetchone()
+    if duplicate:
+        raise ValueError("A class with this name already exists for the selected course.")
+    course_row = cursor.execute("SELECT institution_id FROM institution_courses WHERE id = ?", (str(course_id),)).fetchone()
+    if not course_row:
+        raise ValueError("Course not found.")
+    now = datetime.now().isoformat(timespec="seconds")
+    section_id = f"section-{uuid.uuid4().hex}"
+    cursor.execute(
+        "INSERT INTO course_sections (id, institution_id, course_id, external_id, name, section_code, term, room, schedule, capacity, active, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        (section_id, str(course_row[0]), str(course_id), class_name, str(section_code or "").strip(), str(term or "").strip(), str(room or "").strip(), str(schedule or "").strip(), max(0, int(capacity or 0)), now, now),
+    )
+    conn.commit()
+    write_audit_log("faculty_class_created", user_id, st.session_state.get("user_role", "faculty"), None, f"Created class {class_name} for course {course_id}")
+    return section_id
+
+
+def register_students_to_section(user_id, section_id, student_ids):
+    if not can_manage_section(user_id, section_id):
+        raise PermissionError("You are not authorized to manage this class.")
+    section_info = cursor.execute(
+        "SELECT s.course_id, s.institution_id, s.capacity, s.name FROM course_sections s WHERE s.id = ? AND s.active = 1",
+        (str(section_id),),
+    ).fetchone()
+    if not section_info:
+        raise ValueError("Class not found.")
+    course_id, institution_id, capacity, section_name = section_info
+    requested_ids = [str(x) for x in (student_ids or []) if str(x).strip()]
+    if not requested_ids:
+        return 0, [], "No students selected."
+    roster_existing = int(cursor.execute("SELECT COUNT(*) FROM section_enrollments WHERE section_id = ? AND role = 'student' AND status = 'active'", (str(section_id),)).fetchone()[0] or 0)
+    if int(capacity or 0) > 0 and roster_existing + len(requested_ids) > int(capacity):
+        raise ValueError(f"Registration would exceed the class capacity of {int(capacity)}.")
+    added = 0
+    already = 0
+    invalid = []
+    now = datetime.now().isoformat(timespec="seconds")
+    for student_id in requested_ids:
+        student = cursor.execute(
+            "SELECT auth_id FROM users WHERE auth_id = ? AND institution_id = ? AND role = 'student' AND account_status = 'active'",
+            (student_id, str(institution_id)),
+        ).fetchone()
+        if not student:
+            invalid.append(student_id)
+            continue
+        existing = cursor.execute(
+            "SELECT status FROM section_enrollments WHERE section_id = ? AND user_id = ? AND role = 'student'",
+            (str(section_id), student_id),
+        ).fetchone()
+        if existing and str(existing[0] or "active") == "active":
+            already += 1
+            continue
+        if existing:
+            cursor.execute(
+                "UPDATE section_enrollments SET status = 'active', enrolled_at = ? WHERE section_id = ? AND user_id = ? AND role = 'student'",
+                (now, str(section_id), student_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO section_enrollments (section_id, user_id, role, status, enrolled_at) VALUES (?, ?, 'student', 'active', ?)",
+                (str(section_id), student_id, now),
+            )
+        course_enrolled = cursor.execute("SELECT 1 FROM course_enrollments WHERE course_id = ? AND user_id = ?", (str(course_id), student_id)).fetchone()
+        if not course_enrolled:
+            cursor.execute(
+                "INSERT INTO course_enrollments (course_id, user_id, enrolled_at, enrolled_by) VALUES (?, ?, ?, ?)",
+                (str(course_id), student_id, now, user_id),
+            )
+        added += 1
+    conn.commit()
+    if added:
+        write_audit_log("students_registered_to_class", user_id, st.session_state.get("user_role", "faculty"), None, f"Added {added} students to {section_name}; already={already}; invalid={len(invalid)}")
+    return added, invalid, f"Added {added} students; {already} already registered."
+
+
+def bulk_register_students_by_email(user_id, section_id, emails):
+    normalized = []
+    seen = set()
+    for raw in emails or []:
+        email_value = clean_email(raw)
+        if email_value and email_value not in seen:
+            normalized.append(email_value)
+            seen.add(email_value)
+    if not normalized:
+        return {"added": 0, "not_found": [], "already": 0}
+    student_ids = []
+    not_found = []
+    for email_value in normalized:
+        row = cursor.execute(
+            "SELECT auth_id FROM users WHERE lower(email) = ? AND role = 'student' AND institution_id = ? AND account_status = 'active'",
+            (email_value, user_institution_id(user_id)),
+        ).fetchone()
+        if row:
+            student_ids.append(str(row[0]))
+        else:
+            not_found.append(email_value)
+    added, invalid, summary = register_students_to_section(user_id, section_id, student_ids)
+    return {"added": added, "not_found": not_found, "already": max(0, len(student_ids) - added)}
+
+
+def attendance_session_for_date(section_id, attendance_date):
+    return cursor.execute(
+        "SELECT id, topic, created_at FROM attendance_sessions WHERE section_id = ? AND attendance_date = ?",
+        (str(section_id), str(attendance_date)),
+    ).fetchone()
+
+
+def attendance_status_map(section_id, attendance_date):
+    session = attendance_session_for_date(section_id, attendance_date)
+    if not session:
+        return {}
+    rows = cursor.execute("SELECT student_id, status FROM attendance_records WHERE session_id = ?", (str(session[0]),)).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def save_attendance_for_class(user_id, section_id, attendance_date, topic, status_map):
+    if not can_manage_section(user_id, section_id):
+        raise PermissionError("You are not authorized to record attendance for this class.")
+    roster = section_roster(section_id, active_only=True)
+    if not roster:
+        raise ValueError("Register students in the class before taking attendance.")
+    now = datetime.now().isoformat(timespec="seconds")
+    existing = attendance_session_for_date(section_id, attendance_date)
+    if existing:
+        session_id = str(existing[0])
+        cursor.execute(
+            "UPDATE attendance_sessions SET topic = ? WHERE id = ?",
+            (str(topic or "").strip()[:500], session_id),
+        )
+    else:
+        session_id = f"attendance-{uuid.uuid4().hex}"
+        cursor.execute(
+            "INSERT INTO attendance_sessions (id, section_id, attendance_date, topic, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, str(section_id), str(attendance_date), str(topic or "").strip()[:500], user_id, now),
+        )
+    valid_statuses = {"Present", "Absent", "Late", "Excused"}
+    for student in roster:
+        student_id = str(student[0])
+        status = str(status_map.get(student_id, "Present"))
+        if status not in valid_statuses:
+            status = "Present"
+        exists = cursor.execute(
+            "SELECT 1 FROM attendance_records WHERE session_id = ? AND student_id = ?",
+            (session_id, student_id),
+        ).fetchone()
+        if exists:
+            cursor.execute(
+                "UPDATE attendance_records SET status = ?, marked_at = ?, marked_by = ? WHERE session_id = ? AND student_id = ?",
+                (status, now, user_id, session_id, student_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO attendance_records (session_id, student_id, status, marked_at, marked_by) VALUES (?, ?, ?, ?, ?)",
+                (session_id, student_id, status, now, user_id),
+            )
+    conn.commit()
+    write_audit_log("class_attendance_saved", user_id, st.session_state.get("user_role", "faculty"), None, f"Saved attendance for class {section_id} on {attendance_date}")
+    return session_id
+
+
+def attendance_summary_for_section(section_id):
+    roster = section_roster(section_id, active_only=True)
+    session_rows = cursor.execute(
+        "SELECT id, attendance_date, topic FROM attendance_sessions WHERE section_id = ? ORDER BY attendance_date DESC",
+        (str(section_id),),
+    ).fetchall()
+    total_sessions = len(session_rows)
+    summary = []
+    for student in roster:
+        student_id = str(student[0])
+        present = late = absent = excused = 0
+        for session in session_rows:
+            row = cursor.execute("SELECT status FROM attendance_records WHERE session_id = ? AND student_id = ?", (session[0], student_id)).fetchone()
+            status = str(row[0]) if row else "Unmarked"
+            if status == "Present":
+                present += 1
+            elif status == "Late":
+                late += 1
+            elif status == "Absent":
+                absent += 1
+            elif status == "Excused":
+                excused += 1
+        marked = present + late + absent + excused
+        percentage = ((present + late) / marked * 100.0) if marked else 0.0
+        summary.append({
+            "Student": student[1] or "—",
+            "Email": student[2] or "—",
+            "Present": present,
+            "Late": late,
+            "Absent": absent,
+            "Excused": excused,
+            "Marked": marked,
+            "Sessions": total_sessions,
+            "Attendance %": round(percentage, 1),
+        })
+    return session_rows, summary
+
+
+def attendance_export_csv(section_id):
+    session_rows, summary = attendance_summary_for_section(section_id)
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    section_row = cursor.execute(
+        "SELECT s.name, s.section_code, c.name, c.code FROM course_sections s JOIN institution_courses c ON c.id = s.course_id WHERE s.id = ?",
+        (str(section_id),),
+    ).fetchone()
+    if section_row:
+        writer.writerow(["Class", section_row[0], "Section", section_row[1] or "", "Course", section_row[2], "Course Code", section_row[3] or ""])
+    writer.writerow(["Attendance sessions", len(session_rows)])
+    writer.writerow([])
+    writer.writerow(["Student", "Email", "Present", "Late", "Absent", "Excused", "Marked", "Sessions", "Attendance %"])
+    for row in summary:
+        writer.writerow([row[key] for key in ["Student", "Email", "Present", "Late", "Absent", "Excused", "Marked", "Sessions", "Attendance %"]])
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def attendance_class_template_csv():
+    return "email\nstudent1@university.edu\nstudent2@university.edu\n".encode("utf-8")
 
 
 def course_material_text_from_upload(file_name, file_bytes):
@@ -5784,7 +6044,7 @@ elif st.session_state.page == 14:
         st.markdown('<div class="ai-panel"><div class="ai-badge">Grounded AI</div><div class="ai-title">🧠 What the AI can use here</div><div class="ai-text">Your AI Agent can use your profile, personal academic records, your uploaded documents, and the courses/material authorized for this account. It will not use an unrelated university course simply because it exists in the database.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
-    st.markdown('<div class="page-banner"><div class="page-title">👨‍🏫 Faculty Center</div><div class="page-sub">Manage assigned courses, course material, assignments and enrolled students from one teaching workspace.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-banner"><div class="page-title">👨‍🏫 Faculty Center</div><div class="page-sub">Manage courses, teaching material, class rosters, assignments and attendance from one teaching workspace.</div></div>', unsafe_allow_html=True)
 
     faculty_course_rows = faculty_courses(AUTH_ID)
     if st.session_state.user_role in {"university_admin", "creator"}:
@@ -5801,52 +6061,162 @@ elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "
         selected_course = course_map[selected_course_label]
         selected_course_id = selected_course[0]
 
-        roster_count = int(cursor.execute("SELECT COUNT(*) FROM course_enrollments WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
+        course_sections = faculty_sections_for_course(AUTH_ID, selected_course_id)
+        total_course_roster = int(cursor.execute("SELECT COUNT(*) FROM course_enrollments WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
         material_count = int(cursor.execute("SELECT COUNT(*) FROM course_materials WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
         course_assignment_count = int(cursor.execute("SELECT COUNT(*) FROM course_assignments WHERE course_id = ?", (selected_course_id,)).fetchone()[0] or 0)
 
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Enrolled students", roster_count)
-        k2.metric("Course materials", material_count)
-        k3.metric("Course assignments", course_assignment_count)
-        k4.metric("Credits", selected_course[4] or 0)
+        k1.metric("Course students", total_course_roster)
+        k2.metric("Classes", len(course_sections))
+        k3.metric("Course materials", material_count)
+        k4.metric("Course assignments", course_assignment_count)
 
         st.markdown('<div class="panel"><div class="panel-title">📘 Course overview</div><div class="panel-sub">This information belongs to the university course, not to an individual student workspace.</div></div>', unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2)
         overview_left.markdown(f"**Course:** {selected_course[1]}<br>**Code:** {selected_course[2] or '—'}<br>**Department:** {selected_course[5] or '—'}", unsafe_allow_html=True)
         overview_right.markdown(f"**Semester:** {selected_course[3] or '—'}<br>**Credits:** {selected_course[4] or '—'}<br>**Description:** {cursor.execute('SELECT description FROM institution_courses WHERE id = ?', (selected_course_id,)).fetchone()[0] or '—'}", unsafe_allow_html=True)
 
-        upload_col, assignment_col = st.columns(2)
-        with upload_col:
-            st.markdown('<div class="panel"><div class="panel-title">📚 Upload course material</div><div class="panel-sub">Materials become part of the course knowledge base for future university AI features.</div></div>', unsafe_allow_html=True)
-            material_file = st.file_uploader("Course file", type=["pdf", "docx", "pptx", "txt", "md", "markdown"], key=f"faculty_material_{selected_course_id}")
-            if material_file:
-                if material_file.size > 10 * 1024 * 1024:
-                    st.error("Please keep course files under 10 MB.")
-                upload_material = st.button("⬆️ Save course material", key=f"save_material_{selected_course_id}", use_container_width=True)
-                if upload_material and material_file.size <= 10 * 1024 * 1024:
-                    try:
-                        material_text = course_material_text_from_upload(material_file.name, material_file.getvalue())
-                        if not material_text:
-                            st.error("No readable text was found in this file.")
-                        else:
-                            file_hash = hashlib.sha256(material_file.getvalue()).hexdigest()
-                            duplicate = cursor.execute("SELECT id FROM course_materials WHERE course_id = ? AND name = ?", (selected_course_id, material_file.name)).fetchone()
-                            if duplicate:
-                                st.warning("A course material with this filename already exists.")
-                            else:
-                                cursor.execute(
-                                    "INSERT INTO course_materials (id, course_id, uploader_id, name, file_type, content_text, char_count, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                    (f"material-{uuid.uuid4().hex}", selected_course_id, AUTH_ID, material_file.name, material_file.name.rsplit('.', 1)[-1].lower() if '.' in material_file.name else 'file', material_text, len(material_text), datetime.now().isoformat(timespec='seconds')),
-                                )
-                                conn.commit()
-                                write_audit_log("course_material_uploaded", AUTH_ID, st.session_state.user_role, None, f"Uploaded {material_file.name} to course {selected_course[1]}; sha256={file_hash}")
-                                st.success("Course material saved.")
-                                st.rerun()
-                    except Exception as exc:
-                        st.error(f"Could not process the course file: {type(exc).__name__}: {exc}")
+        class_tab, material_tab, assignment_tab, attendance_tab = st.tabs(["🏫 Class & Roster", "📚 Teaching Material", "📝 Assignments", "📅 Attendance"])
 
-        with assignment_col:
+        with class_tab:
+            st.markdown('<div class="panel"><div class="panel-title">🏫 Create a class / section</div><div class="panel-sub">Create a class group inside this course, then register the students who belong to that class.</div></div>', unsafe_allow_html=True)
+            with st.form(f"create_class_form_{selected_course_id}", clear_on_submit=True):
+                cc1, cc2 = st.columns(2)
+                class_name_input = cc1.text_input("Class name", placeholder="e.g. BS AI Section A")
+                section_code_input = cc2.text_input("Section code", placeholder="e.g. AI-2A")
+                cc3, cc4 = st.columns(2)
+                class_term_input = cc3.text_input("Term / semester", value=str(selected_course[3] or ""), placeholder="e.g. Fall 2026")
+                class_room_input = cc4.text_input("Room", placeholder="e.g. Lab 204")
+                cc5, cc6 = st.columns(2)
+                class_schedule_input = cc5.text_input("Schedule", placeholder="e.g. Mon/Wed 10:00 AM")
+                class_capacity_input = cc6.number_input("Capacity (0 = no limit)", min_value=0, max_value=5000, value=0, step=1)
+                create_class_button = st.form_submit_button("🏫 Create class", use_container_width=True)
+            if create_class_button:
+                try:
+                    new_section_id = create_faculty_class(AUTH_ID, selected_course_id, class_name_input, section_code_input, class_term_input, class_room_input, class_schedule_input, class_capacity_input)
+                    st.success("Class created successfully.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not create the class: {type(exc).__name__}: {exc}")
+
+            course_sections = faculty_sections_for_course(AUTH_ID, selected_course_id)
+            if not course_sections:
+                st.info("Create your first class above. Then you can register students and take attendance for that class.")
+            else:
+                section_labels = [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in course_sections]
+                chosen_section_label = st.selectbox("Select class", section_labels, key=f"faculty_class_selector_{selected_course_id}")
+                chosen_section = course_sections[section_labels.index(chosen_section_label)]
+                chosen_section_id = chosen_section[0]
+                current_class_roster = section_roster(chosen_section_id, active_only=True)
+                capacity_text = f" / {chosen_section[6]}" if int(chosen_section[6] or 0) > 0 else ""
+                rc1, rc2, rc3, rc4 = st.columns(4)
+                rc1.metric("Students", len(current_class_roster))
+                rc2.metric("Capacity", (str(chosen_section[6]) if int(chosen_section[6] or 0) > 0 else "Unlimited"))
+                rc3.metric("Term", chosen_section[3] or "—")
+                rc4.metric("Room", chosen_section[4] or "—")
+
+                st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👥 Register students to this class</div><div class="panel-sub">Register existing StudySphere student accounts. You can select students manually, register everyone, or upload a CSV containing student email addresses.</div></div>', unsafe_allow_html=True)
+                institution_students = cursor.execute(
+                    "SELECT auth_id, name, email, degree, semester FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active' ORDER BY name",
+                    (user_institution_id(AUTH_ID),),
+                ).fetchall()
+                enrolled_ids = {str(r[0]) for r in current_class_roster}
+                available_students = [r for r in institution_students if str(r[0]) not in enrolled_ids]
+                if available_students:
+                    select_all_students = st.checkbox("Register all currently unregistered students in this institution", key=f"register_all_{chosen_section_id}")
+                    available_labels = [f"{r[1]} • {r[2]}" for r in available_students]
+                    selected_labels = available_labels if select_all_students else st.multiselect("Students to register", available_labels, key=f"register_students_{chosen_section_id}")
+                    selected_ids = [available_students[available_labels.index(label)][0] for label in selected_labels]
+                    if st.button("🎓 Register selected students", key=f"register_students_button_{chosen_section_id}", use_container_width=True):
+                        try:
+                            added, invalid, summary_text = register_students_to_section(AUTH_ID, chosen_section_id, selected_ids)
+                            st.success(summary_text)
+                            if invalid:
+                                st.warning(f"Could not register {len(invalid)} selected account(s).")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Student registration failed: {type(exc).__name__}: {exc}")
+                else:
+                    st.success("All active institution students are already registered in this class.")
+
+                template_col, upload_col = st.columns([1, 2])
+                template_col.download_button(
+                    "⬇️ Download CSV template",
+                    data=attendance_class_template_csv(),
+                    file_name="studysphere_class_students.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key=f"class_student_template_{chosen_section_id}",
+                )
+                class_csv = upload_col.file_uploader("Bulk register from CSV (email column)", type=["csv"], key=f"class_student_csv_{chosen_section_id}")
+                if class_csv and st.button("⬆️ Register students from CSV", key=f"class_student_csv_button_{chosen_section_id}", use_container_width=True):
+                    try:
+                        csv_text = class_csv.getvalue().decode("utf-8-sig", errors="replace")
+                        reader = csv.DictReader(io.StringIO(csv_text))
+                        csv_emails = []
+                        for row in reader:
+                            for field_name in ["email", "student_email", "email_address"]:
+                                if row.get(field_name):
+                                    csv_emails.append(row.get(field_name))
+                                    break
+                        result = bulk_register_students_by_email(AUTH_ID, chosen_section_id, csv_emails)
+                        st.success(f"Registered {result['added']} students from CSV. {result['already']} were already registered.")
+                        if result["not_found"]:
+                            st.warning("These email addresses were not found as active student accounts: " + ", ".join(result["not_found"][:20]))
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"CSV registration failed: {type(exc).__name__}: {exc}")
+
+                st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📋 Class roster</div><div class="panel-sub">Students currently registered in the selected class.</div></div>', unsafe_allow_html=True)
+                if current_class_roster:
+                    st.dataframe(
+                        [{"Student": r[1], "Email": r[2], "Program": r[3] or "—", "Semester": r[4] or "—", "Registered": r[5]} for r in current_class_roster],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No students have been registered in this class yet.")
+
+        with material_tab:
+            upload_col, material_list_col = st.columns(2)
+            with upload_col:
+                st.markdown('<div class="panel"><div class="panel-title">📚 Upload course material</div><div class="panel-sub">Materials become part of the course knowledge base for future university AI features.</div></div>', unsafe_allow_html=True)
+                material_file = st.file_uploader("Course file", type=["pdf", "docx", "pptx", "txt", "md", "markdown"], key=f"faculty_material_{selected_course_id}")
+                if material_file:
+                    if material_file.size > 10 * 1024 * 1024:
+                        st.error("Please keep course files under 10 MB.")
+                    upload_material = st.button("⬆️ Save course material", key=f"save_material_{selected_course_id}", use_container_width=True)
+                    if upload_material and material_file.size <= 10 * 1024 * 1024:
+                        try:
+                            material_text = course_material_text_from_upload(material_file.name, material_file.getvalue())
+                            if not material_text:
+                                st.error("No readable text was found in this file.")
+                            else:
+                                file_hash = hashlib.sha256(material_file.getvalue()).hexdigest()
+                                duplicate = cursor.execute("SELECT id FROM course_materials WHERE course_id = ? AND name = ?", (selected_course_id, material_file.name)).fetchone()
+                                if duplicate:
+                                    st.warning("A course material with this filename already exists.")
+                                else:
+                                    cursor.execute(
+                                        "INSERT INTO course_materials (id, course_id, uploader_id, name, file_type, content_text, char_count, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                        (f"material-{uuid.uuid4().hex}", selected_course_id, AUTH_ID, material_file.name, material_file.name.rsplit('.', 1)[-1].lower() if '.' in material_file.name else 'file', material_text, len(material_text), datetime.now().isoformat(timespec='seconds')),
+                                    )
+                                    conn.commit()
+                                    write_audit_log("course_material_uploaded", AUTH_ID, st.session_state.user_role, None, f"Uploaded {material_file.name} to course {selected_course[1]}; sha256={file_hash}")
+                                    st.success("Course material saved.")
+                                    st.rerun()
+                        except Exception as exc:
+                            st.error(f"Could not process the course file: {type(exc).__name__}: {exc}")
+            with material_list_col:
+                st.markdown('<div class="panel"><div class="panel-title">📚 Course materials</div><div class="panel-sub">Uploaded teaching material stored for this course.</div></div>', unsafe_allow_html=True)
+                course_materials = cursor.execute("SELECT name, file_type, char_count, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC", (selected_course_id,)).fetchall()
+                if course_materials:
+                    st.dataframe([{"File": r[0], "Type": r[1].upper(), "Characters": r[2], "Uploaded": r[3]} for r in course_materials], use_container_width=True, hide_index=True)
+                else:
+                    st.info("No course material has been uploaded yet.")
+
+        with assignment_tab:
             st.markdown('<div class="panel"><div class="panel-title">📝 Create course assignment</div><div class="panel-sub">Create an assignment at the course level so enrolled students can receive the same academic task.</div></div>', unsafe_allow_html=True)
             course_assignment_title = st.text_input("Assignment title", key=f"faculty_assignment_title_{selected_course_id}")
             course_assignment_due = st.date_input("Due date", key=f"faculty_assignment_due_{selected_course_id}")
@@ -5865,31 +6235,76 @@ elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "
                     st.success("Course assignment published.")
                     st.rerun()
 
-        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📑 Current course assignments</div><div class="panel-sub">Assignments created for this university course.</div></div>', unsafe_allow_html=True)
-        course_assignments = cursor.execute("SELECT title, due_date, description, created_at FROM course_assignments WHERE course_id = ? ORDER BY due_date", (selected_course_id,)).fetchall()
-        if course_assignments:
-            st.dataframe([{"Assignment": r[0], "Due date": r[1], "Description": r[2] or "", "Created": r[3]} for r in course_assignments], use_container_width=True, hide_index=True)
-        else:
-            st.info("No course-level assignments have been published yet.")
+            st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📑 Current course assignments</div><div class="panel-sub">Assignments created for this university course.</div></div>', unsafe_allow_html=True)
+            course_assignments = cursor.execute("SELECT title, due_date, description, created_at FROM course_assignments WHERE course_id = ? ORDER BY due_date", (selected_course_id,)).fetchall()
+            if course_assignments:
+                st.dataframe([{"Assignment": r[0], "Due date": r[1], "Description": r[2] or "", "Created": r[3]} for r in course_assignments], use_container_width=True, hide_index=True)
+            else:
+                st.info("No course-level assignments have been published yet.")
 
-        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📚 Course materials</div><div class="panel-sub">Uploaded teaching material stored for this course.</div></div>', unsafe_allow_html=True)
-        course_materials = cursor.execute("SELECT name, file_type, char_count, uploaded_at FROM course_materials WHERE course_id = ? ORDER BY uploaded_at DESC", (selected_course_id,)).fetchall()
-        if course_materials:
-            st.dataframe([{"File": r[0], "Type": r[1].upper(), "Characters": r[2], "Uploaded": r[3]} for r in course_materials], use_container_width=True, hide_index=True)
-        else:
-            st.info("No course material has been uploaded yet.")
+        with attendance_tab:
+            st.markdown('<div class="panel"><div class="panel-title">📅 Class Attendance</div><div class="panel-sub">Take daily attendance for a selected class. Attendance records are stored separately from course enrollment.</div></div>', unsafe_allow_html=True)
+            attendance_sections = faculty_sections_for_course(AUTH_ID, selected_course_id)
+            if not attendance_sections:
+                st.info("Create a class in the Class & Roster tab before taking attendance.")
+            else:
+                attendance_section_labels = [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in attendance_sections]
+                attendance_section_label = st.selectbox("Attendance class", attendance_section_labels, key=f"attendance_section_{selected_course_id}")
+                attendance_section = attendance_sections[attendance_section_labels.index(attendance_section_label)]
+                attendance_section_id = attendance_section[0]
+                attendance_date = st.date_input("Attendance date", value=date.today(), key=f"attendance_date_{attendance_section_id}")
+                existing_attendance_session = attendance_session_for_date(attendance_section_id, attendance_date)
+                existing_attendance_map = attendance_status_map(attendance_section_id, attendance_date)
+                attendance_topic_default = existing_attendance_session[1] if existing_attendance_session else ""
+                attendance_topic = st.text_input("Topic / lecture", value=attendance_topic_default, placeholder="e.g. Introduction to Normalization", key=f"attendance_topic_{attendance_section_id}_{attendance_date}")
+                attendance_roster = section_roster(attendance_section_id, active_only=True)
+                if not attendance_roster:
+                    st.warning("This class has no registered students yet. Register the students in the Class & Roster tab first.")
+                else:
+                    st.caption("Status options: Present • Absent • Late • Excused")
+                    attendance_values = {}
+                    with st.form(f"attendance_form_{attendance_section_id}_{attendance_date}"):
+                        for student in attendance_roster:
+                            student_id = str(student[0])
+                            existing_status = existing_attendance_map.get(student_id, "Present")
+                            options = ["Present", "Absent", "Late", "Excused"]
+                            default_index = options.index(existing_status) if existing_status in options else 0
+                            ar_left, ar_right = st.columns([3, 1])
+                            ar_left.markdown(f"**{student[1] or 'Student'}**<br><span style='color:var(--ss-muted);font-size:12px'>{student[2] or ''}</span>", unsafe_allow_html=True)
+                            attendance_values[student_id] = ar_right.selectbox("Status", options, index=default_index, key=f"attendance_status_{attendance_section_id}_{attendance_date}_{student_id}", label_visibility="collapsed")
+                        save_attendance_button = st.form_submit_button("💾 Save attendance", use_container_width=True)
+                    if save_attendance_button:
+                        try:
+                            session_id = save_attendance_for_class(AUTH_ID, attendance_section_id, attendance_date, attendance_topic, attendance_values)
+                            st.success(f"Attendance saved for {len(attendance_roster)} students.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Could not save attendance: {type(exc).__name__}: {exc}")
 
-        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👥 Enrolled students</div><div class="panel-sub">Only students enrolled in this course are listed.</div></div>', unsafe_allow_html=True)
-        roster = cursor.execute(
-            "SELECT u.name, u.email, u.degree, u.semester, ce.enrolled_at FROM course_enrollments ce JOIN users u ON u.auth_id = ce.user_id WHERE ce.course_id = ? ORDER BY u.name",
-            (selected_course_id,),
-        ).fetchall()
-        if roster:
-            st.dataframe([{"Student": r[0], "Email": r[1], "Program": r[2] or "—", "Semester": r[3] or "—", "Enrolled": r[4]} for r in roster], use_container_width=True, hide_index=True)
-        else:
-            st.info("No students are enrolled in this course yet. A University Admin can enroll students from the University Admin page.")
+                    _, summary_rows = attendance_summary_for_section(attendance_section_id)
+                    today_counts = Counter(attendance_values.values()) if attendance_values else Counter()
+                    ta1, ta2, ta3, ta4 = st.columns(4)
+                    ta1.metric("Present", int(today_counts.get("Present", 0)))
+                    ta2.metric("Late", int(today_counts.get("Late", 0)))
+                    ta3.metric("Absent", int(today_counts.get("Absent", 0)))
+                    ta4.metric("Excused", int(today_counts.get("Excused", 0)))
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">👨‍🏫 Faculty workspace is ready</div><div class="ai-text">This step creates the institutional course layer. Faculty can manage course material and course-level assignments without mixing them with a student’s personal records. The next AI layer can safely use only material the institution has authorized for the course.</div></div>', unsafe_allow_html=True)
+                    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📊 Attendance summary</div><div class="panel-sub">Attendance percentage counts Present + Late as attended and is based only on marked sessions.</div></div>', unsafe_allow_html=True)
+                    if summary_rows:
+                        st.dataframe(summary_rows, use_container_width=True, hide_index=True)
+                        st.download_button(
+                            "⬇️ Export attendance report (CSV)",
+                            data=attendance_export_csv(attendance_section_id),
+                            file_name=f"{selected_course[1].replace(' ', '_')}_{attendance_section[1].replace(' ', '_')}_attendance.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                            key=f"attendance_export_{attendance_section_id}",
+                        )
+                    else:
+                        st.info("Attendance summary will appear after students are registered.")
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Class & Attendance</div><div class="ai-title">🏫 One course can now contain real class groups</div><div class="ai-text">Faculty can create a class, register existing student accounts individually or in bulk, upload course material, publish course assignments, and record attendance by date. Attendance is separated from enrollment so the class roster and daily attendance history remain consistent.</div></div>', unsafe_allow_html=True)
+
 
 elif st.session_state.page == 15 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🧠 Faculty AI</div><div class="page-sub">Create course summaries and assessments using only material stored in your authorized university courses. University Knowledge AI is available separately for institution-scoped information.</div></div>', unsafe_allow_html=True)
