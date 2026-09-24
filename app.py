@@ -6357,6 +6357,150 @@ elif st.session_state.page == 13 and st.session_state.user_role in {"university_
                     st.success("Course created.")
                     st.rerun()
 
+
+    st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">👩‍🏫 Create Faculty Account</div><div class="panel-sub">Create a faculty account directly from the university administration workspace. The account is created with the Faculty role and can immediately be assigned to a course.</div></div>', unsafe_allow_html=True)
+
+    faculty_account_departments = cursor.execute(
+        "SELECT id, name, code FROM departments WHERE institution_id = ? ORDER BY name",
+        (institution_id,),
+    ).fetchall()
+    faculty_account_courses = institution_courses_for_admin(institution_id)
+    faculty_department_labels = ["No department"] + [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in faculty_account_departments]
+    faculty_initial_course_labels = ["Do not assign a course yet"] + [f"{r[1]}" + (f" ({r[2]})" if r[2] else "") for r in faculty_account_courses]
+
+    with st.form("admin_create_faculty_form", clear_on_submit=True):
+        fc1, fc2 = st.columns(2)
+        faculty_name_input = fc1.text_input("Faculty full name", placeholder="e.g. Dr. Ahmed Khan")
+        faculty_email_input = fc2.text_input("Official email address", placeholder="e.g. ahmed@university.edu")
+        fc3, fc4 = st.columns(2)
+        faculty_department_choice = fc3.selectbox("Department", faculty_department_labels, key="admin_new_faculty_department")
+        faculty_initial_course_choice = fc4.selectbox("Initial course (optional)", faculty_initial_course_labels, key="admin_new_faculty_course")
+        faculty_password_mode = st.radio(
+            "Initial password",
+            ["Generate a temporary password", "Set the password yourself"],
+            horizontal=True,
+            key="admin_faculty_password_mode",
+        )
+        faculty_password_input = ""
+        faculty_confirm_input = ""
+        if faculty_password_mode == "Set the password yourself":
+            fp1, fp2 = st.columns(2)
+            faculty_password_input = fp1.text_input("Temporary password", type="password", key="admin_faculty_password")
+            faculty_confirm_input = fp2.text_input("Confirm temporary password", type="password", key="admin_faculty_password_confirm")
+        create_faculty_account = st.form_submit_button("👩‍🏫 Create Faculty Account", use_container_width=True)
+
+    if create_faculty_account:
+        faculty_name_clean = clean_name(faculty_name_input)
+        faculty_email_clean = clean_email(faculty_email_input)
+        selected_department_id = None
+        if faculty_department_choice != "No department" and faculty_account_departments:
+            selected_department_id = faculty_account_departments[faculty_department_labels.index(faculty_department_choice) - 1][0]
+
+        selected_course_id = None
+        if faculty_initial_course_choice != "Do not assign a course yet" and faculty_account_courses:
+            selected_course_index = faculty_initial_course_labels.index(faculty_initial_course_choice) - 1
+            selected_course_id = faculty_account_courses[selected_course_index][0]
+
+        generated_faculty_password = ""
+        final_faculty_password = faculty_password_input.strip()
+        if faculty_password_mode == "Generate a temporary password":
+            generated_faculty_password = f"SS-Faculty-{secrets.token_urlsafe(8)}"
+            final_faculty_password = generated_faculty_password
+
+        if not faculty_name_clean or not faculty_email_clean:
+            st.error("Enter the faculty member's full name and official email.")
+        elif not valid_email(faculty_email_clean):
+            st.error("Enter a valid official email address.")
+        elif len(final_faculty_password) < 8:
+            st.error("Use a password with at least 8 characters.")
+        elif faculty_password_mode == "Set the password yourself" and final_faculty_password != faculty_confirm_input:
+            st.error("The temporary passwords do not match.")
+        else:
+            existing_faculty_account = cursor.execute(
+                "SELECT auth_id, role, password_hash FROM users WHERE lower(email) = ?",
+                (faculty_email_clean,),
+            ).fetchone()
+            if existing_faculty_account:
+                st.error("An account with this email already exists. Use the existing account instead of creating a duplicate.")
+            else:
+                faculty_auth_id = f"faculty-{uuid.uuid4().hex}"
+                now = datetime.now().isoformat(timespec="seconds")
+                faculty_password_salt, faculty_password_hash = hash_secret(final_faculty_password)
+                faculty_recovery_code = generate_recovery_code()
+                faculty_recovery_salt, faculty_recovery_hash = hash_secret(faculty_recovery_code)
+                try:
+                    faculty_department_name = ""
+                    if selected_department_id:
+                        faculty_department_name = faculty_account_departments[faculty_department_labels.index(faculty_department_choice) - 1][1]
+
+                    cursor.execute(
+                        "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, department, auth_provider, last_auth_method, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            faculty_auth_id,
+                            faculty_name_clean,
+                            faculty_email_clean,
+                            faculty_password_hash,
+                            faculty_password_salt,
+                            faculty_recovery_hash,
+                            faculty_recovery_salt,
+                            now,
+                            now,
+                            now,
+                            "faculty",
+                            institution_id,
+                            faculty_department_name,
+                            "local",
+                            "local",
+                            "active",
+                        ),
+                    )
+
+                    assigned_course_name = ""
+                    if selected_course_id:
+                        existing_course_assignment = cursor.execute(
+                            "SELECT 1 FROM course_faculty WHERE course_id = ? AND user_id = ?",
+                            (selected_course_id, faculty_auth_id),
+                        ).fetchone()
+                        if not existing_course_assignment:
+                            cursor.execute(
+                                "INSERT INTO course_faculty (course_id, user_id, assigned_at, assigned_by) VALUES (?, ?, ?, ?)",
+                                (selected_course_id, faculty_auth_id, now, AUTH_ID),
+                            )
+                            assigned_course_row = cursor.execute(
+                                "SELECT name, code FROM institution_courses WHERE id = ?",
+                                (selected_course_id,),
+                            ).fetchone()
+                            if assigned_course_row:
+                                assigned_course_name = assigned_course_row[0] + (f" ({assigned_course_row[1]})" if assigned_course_row[1] else "")
+
+                    conn.commit()
+                    write_audit_log(
+                        "faculty_account_created",
+                        AUTH_ID,
+                        st.session_state.user_role,
+                        faculty_auth_id,
+                        f"Created faculty account {faculty_email_clean}" + (f"; initial course={assigned_course_name}" if assigned_course_name else ""),
+                    )
+                    st.success(f"Faculty account created successfully for {faculty_name_clean}.")
+                    st.info("Give the faculty member their login email and temporary password securely. They can sign in and change the password from Profile.")
+                    credentials_col1, credentials_col2 = st.columns(2)
+                    credentials_col1.markdown(f"**Login email**  \n`{faculty_email_clean}`")
+                    if generated_faculty_password:
+                        credentials_col2.markdown(f"**Temporary password**  \n`{generated_faculty_password}`")
+                    else:
+                        credentials_col2.markdown("**Temporary password**  \nThe password you entered was not displayed again.")
+                    st.markdown(f"**Recovery code**  \n`{faculty_recovery_code}`")
+                    if assigned_course_name:
+                        st.success(f"Initial course assigned: {assigned_course_name}")
+                    else:
+                        st.caption("No course was assigned yet. You can assign courses below in Course & faculty management.")
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    st.error("That faculty email is already registered.")
+                except Exception as exc:
+                    conn.rollback()
+                    st.error(f"Faculty account creation failed: {str(exc)}")
+
     st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📋 Department directory</div><div class="panel-sub">Departments currently configured for this institution.</div></div>', unsafe_allow_html=True)
     department_directory = cursor.execute("SELECT d.name, d.code, COUNT(c.id) FROM departments d LEFT JOIN institution_courses c ON c.department_id = d.id WHERE d.institution_id = ? GROUP BY d.id ORDER BY d.name", (institution_id,)).fetchall()
     if department_directory:
