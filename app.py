@@ -68,6 +68,209 @@ st.set_page_config(
 )
 
 # ============================================================
+# STUDYSPHERE — ONE-FILE PWA / MOBILE APP LAYER
+# ============================================================
+# Everything below is kept inside app.py so this project can be
+# deployed as a single Streamlit file.
+#
+# Note:
+# Streamlit does not expose a normal root-level static-file route
+# from one Python file, so the manifest is supplied as a data URL.
+# This gives browsers the install/app metadata where supported.
+# Core Streamlit, authentication, SQLite, Gemini and uploads still
+# require an internet connection.
+
+import base64 as _ss_base64
+import json as _ss_json
+import urllib.parse as _ss_urlparse
+
+_SS_PWA_MANIFEST = {
+    "name": "StudySphere",
+    "short_name": "StudySphere",
+    "description": "Learn smarter. Plan better. Achieve more.",
+    "start_url": ".",
+    "scope": ".",
+    "display": "standalone",
+    "orientation": "portrait-primary",
+    "background_color": "#F8FAFC",
+    "theme_color": "#7C3AED",
+    "prefer_related_applications": False,
+    "icons": [
+        {
+            # A self-contained SVG icon, so no second file is needed.
+            "src": "data:image/svg+xml," + _ss_urlparse.quote(
+                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+                <rect width="512" height="512" rx="112" fill="#7C3AED"/>
+                <rect x="128" y="96" width="256" height="320" rx="32" fill="white"/>
+                <path d="M180 168h152M180 224h152M180 280h104" stroke="#7C3AED"
+                      stroke-width="28" stroke-linecap="round"/>
+                <circle cx="350" cy="344" r="30" fill="#7C3AED"/>
+                <path d="M337 344l10 10 20-23" fill="none" stroke="white"
+                      stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>"""
+            ),
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}
+
+_SS_PWA_JSON = _ss_json.dumps(_SS_PWA_MANIFEST, separators=(",", ":"))
+_SS_PWA_DATA_URL = (
+    "data:application/manifest+json;base64,"
+    + _ss_base64.b64encode(_SS_PWA_JSON.encode("utf-8")).decode("ascii")
+)
+
+st.markdown(
+    f"""
+    <link rel="manifest" href="{_SS_PWA_DATA_URL}">
+    <meta name="theme-color" content="#7C3AED">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="StudySphere">
+    <meta name="application-name" content="StudySphere">
+    <meta name="msapplication-TileColor" content="#7C3AED">
+
+    <style>
+    /* ---------- PWA / mobile polish ---------- */
+    @media (max-width: 768px) {{
+        .block-container {{
+            padding-top: 1rem !important;
+            padding-left: 0.8rem !important;
+            padding-right: 0.8rem !important;
+        }}
+
+        [data-testid="stSidebar"] {{
+            min-width: 260px !important;
+        }}
+
+        div[data-testid="stButton"] > button {{
+            min-height: 44px !important;
+            border-radius: 10px !important;
+        }}
+
+        input, textarea, select {{
+            font-size: 16px !important;
+        }}
+
+        [data-testid="stMetric"] {{
+            min-width: 0 !important;
+        }}
+    }}
+
+    /* Install banner */
+    #ss-install-card {{
+        display:none;
+        position:fixed;
+        left:14px;
+        right:14px;
+        bottom:14px;
+        z-index:999999;
+        padding:14px 16px;
+        border-radius:16px;
+        background:rgba(124,58,237,.97);
+        color:white;
+        box-shadow:0 12px 40px rgba(0,0,0,.28);
+        font-family:Arial,sans-serif;
+    }}
+
+    #ss-install-card .ss-install-title {{
+        font-weight:700;
+        font-size:16px;
+        margin-bottom:4px;
+    }}
+
+    #ss-install-card .ss-install-text {{
+        font-size:13px;
+        opacity:.92;
+        margin-bottom:10px;
+    }}
+
+    #ss-install-btn {{
+        border:0;
+        border-radius:9px;
+        padding:9px 14px;
+        font-weight:700;
+        cursor:pointer;
+        background:white;
+        color:#6D28D9;
+        margin-right:7px;
+    }}
+
+    #ss-install-close {{
+        border:1px solid rgba(255,255,255,.5);
+        border-radius:9px;
+        padding:8px 12px;
+        background:transparent;
+        color:white;
+        cursor:pointer;
+    }}
+    </style>
+
+    <div id="ss-install-card">
+        <div class="ss-install-title">Install StudySphere</div>
+        <div class="ss-install-text">
+            Add StudySphere to your device for a more app-like experience.
+        </div>
+        <button id="ss-install-btn">Install</button>
+        <button id="ss-install-close">Not now</button>
+    </div>
+
+    <script>
+    (function() {{
+        let deferredPrompt = null;
+        const card = document.getElementById("ss-install-card");
+        const installBtn = document.getElementById("ss-install-btn");
+        const closeBtn = document.getElementById("ss-install-close");
+
+        function isStandalone() {{
+            return window.matchMedia("(display-mode: standalone)").matches ||
+                   window.navigator.standalone === true;
+        }}
+
+        window.addEventListener("beforeinstallprompt", function(e) {{
+            e.preventDefault();
+            deferredPrompt = e;
+
+            if (!isStandalone() && card) {{
+                card.style.display = "block";
+            }}
+        }});
+
+        if (installBtn) {{
+            installBtn.addEventListener("click", async function() {{
+                if (!deferredPrompt) return;
+                deferredPrompt.prompt();
+                try {{
+                    await deferredPrompt.userChoice;
+                }} catch (err) {{}}
+                deferredPrompt = null;
+                if (card) card.style.display = "none";
+            }});
+        }}
+
+        if (closeBtn) {{
+            closeBtn.addEventListener("click", function() {{
+                if (card) card.style.display = "none";
+            }});
+        }}
+
+        window.addEventListener("appinstalled", function() {{
+            deferredPrompt = null;
+            if (card) card.style.display = "none";
+        }});
+    }})();
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
+# ============================================================
+# END ONE-FILE PWA LAYER
+# ============================================================
+
+# ============================================================
 # SESSION STATE
 # ============================================================
 
