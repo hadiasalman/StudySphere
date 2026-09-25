@@ -494,12 +494,49 @@ conn.commit()
 # predictions about a student's ability, health, or future performance.
 cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT, source_type TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolution_note TEXT DEFAULT '', resolved_at TEXT)")
 
+# ============================================================
+# STUDENT FEES MANAGEMENT (STEP 16)
+# ============================================================
+# Fees are institution-scoped and student-specific. University Admin/Creator
+# accounts can create and update them; students can only read their own fees.
+cursor.execute("""CREATE TABLE IF NOT EXISTS student_fees (
+    id TEXT PRIMARY KEY,
+    institution_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    fee_type TEXT NOT NULL,
+    term TEXT DEFAULT '',
+    amount REAL NOT NULL DEFAULT 0,
+    paid_amount REAL NOT NULL DEFAULT 0,
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'Pending',
+    notes TEXT DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)""")
+cursor.execute("""CREATE TABLE IF NOT EXISTS student_fee_history (
+    id TEXT PRIMARY KEY,
+    fee_id TEXT NOT NULL,
+    institution_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    changed_by TEXT NOT NULL,
+    old_amount REAL NOT NULL DEFAULT 0,
+    new_amount REAL NOT NULL DEFAULT 0,
+    old_paid_amount REAL NOT NULL DEFAULT 0,
+    new_paid_amount REAL NOT NULL DEFAULT 0,
+    old_status TEXT NOT NULL DEFAULT '',
+    new_status TEXT NOT NULL DEFAULT '',
+    change_note TEXT DEFAULT '',
+    changed_at TEXT NOT NULL
+)""")
+conn.commit()
+
 # Production-friendly schema version tracking. The app still performs the
 # existing additive compatibility migrations above, while this table gives
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
-SCHEMA_VERSION = 14
-SCHEMA_DESCRIPTION = "Production deployment readiness, class registration, attendance, faculty exams, and student academic views"
+SCHEMA_VERSION = 15
+SCHEMA_DESCRIPTION = "Student fee management with institution-scoped admin updates and student read-only views"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -1592,6 +1629,28 @@ def faculty_courses(user_id):
         "ORDER BY c.name",
         (str(user_id), user_institution_id(user_id)),
     ).fetchall()
+
+
+def fee_status_from_amounts(amount, paid_amount):
+    amount_value = max(0.0, float(amount or 0))
+    paid_value = max(0.0, min(float(paid_amount or 0), amount_value))
+    if amount_value <= 0:
+        return "Pending"
+    if paid_value >= amount_value:
+        return "Paid"
+    if paid_value > 0:
+        return "Partially Paid"
+    return "Pending"
+
+def student_fee_rows(student_id, institution_id):
+    return cursor.execute(
+        "SELECT id, fee_type, term, amount, paid_amount, due_date, status, notes, created_at, updated_at "
+        "FROM student_fees WHERE student_id = ? AND institution_id = ? ORDER BY COALESCE(due_date, '9999-12-31'), created_at DESC",
+        (str(student_id), str(institution_id)),
+    ).fetchall()
+
+def fee_balance(amount, paid_amount):
+    return max(0.0, float(amount or 0) - float(paid_amount or 0))
 
 
 def institution_courses_for_admin(institution_id):
@@ -5285,7 +5344,9 @@ nav_options = [
 ]
 if st.session_state.user_role == "student":
     nav_options.append((20, "📊  My Attendance"))
+    nav_options.append((21, "💳  My Fees"))
 if has_permission("manage_university"):
+    nav_options.append((22, "💰  Student Fees"))
     nav_options.append((17, "🔗  Integration Center"))
     nav_options.append((18, "📈  Institutional Analytics"))
 if has_permission("manage_users"):
@@ -5316,6 +5377,12 @@ if st.session_state.page == 16 and not has_permission("use_ai_agent"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 20 and st.session_state.user_role != "student":
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 21 and st.session_state.user_role != "student":
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 22 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 17 and not has_permission("manage_university"):
@@ -5350,6 +5417,12 @@ if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_cont
     st.rerun()
 if st.session_state.user_role == "student" and st.sidebar.button("📊 My Attendance", key="my_attendance_sidebar", use_container_width=True):
     st.session_state.page = 20
+    st.rerun()
+if st.session_state.user_role == "student" and st.sidebar.button("💳 My Fees", key="my_fees_sidebar", use_container_width=True):
+    st.session_state.page = 21
+    st.rerun()
+if has_permission("manage_university") and st.sidebar.button("💰 Student Fees", key="student_fees_admin_sidebar", use_container_width=True):
+    st.session_state.page = 22
     st.rerun()
 if st.sidebar.button("🏛️ University Knowledge AI", key="university_knowledge_sidebar", use_container_width=True):
     st.session_state.page = 16
@@ -6344,6 +6417,32 @@ elif st.session_state.page == 14:
             st.info("No faculty-published exams are scheduled for this course yet.")
 
         st.markdown('<div class="ai-panel"><div class="ai-badge">Grounded AI</div><div class="ai-title">🧠 What the AI can use here</div><div class="ai-text">Your AI Agent can use your profile, personal academic records, your uploaded documents, and the courses/material authorized for this account. It will not use an unrelated university course simply because it exists in the database.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 21 and st.session_state.user_role == "student":
+    st.markdown('<div class="page-banner"><div class="page-title">💳 My Fees</div><div class="page-sub">View the fee records your university has added to your StudySphere account.</div></div>', unsafe_allow_html=True)
+
+    my_fees = student_fee_rows(AUTH_ID, INSTITUTION_ID)
+    if not my_fees:
+        st.markdown('<div class="panel"><div class="panel-title">📭 No fee records yet</div><div class="panel-sub">Your university has not added any fee records to your account yet. When an authorized administrator adds or updates a fee, the changes will appear here.</div></div>', unsafe_allow_html=True)
+    else:
+        total_amount = sum(float(r[3] or 0) for r in my_fees)
+        total_paid = sum(float(r[4] or 0) for r in my_fees)
+        total_balance = max(0.0, total_amount - total_paid)
+        paid_count = sum(1 for r in my_fees if str(r[6] or "").lower() == "paid")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Total fees", f"Rs. {total_amount:,.2f}")
+        s2.metric("Paid", f"Rs. {total_paid:,.2f}")
+        s3.metric("Outstanding", f"Rs. {total_balance:,.2f}")
+        s4.metric("Paid records", paid_count)
+
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📋 Your fee records</div><div class="panel-sub">This view is read-only. Fee amounts, due dates, status, and notes can only be changed by an authorized university administrator.</div></div>', unsafe_allow_html=True)
+        st.dataframe([
+            {"Fee": r[1], "Semester / Term": r[2] or "—", "Amount": f"Rs. {float(r[3] or 0):,.2f}", "Paid": f"Rs. {float(r[4] or 0):,.2f}", "Balance": f"Rs. {fee_balance(r[3], r[4]):,.2f}", "Due date": r[5] or "—", "Status": r[6] or "Pending", "Notes": r[7] or "—", "Last updated": r[9] or r[8] or "—"}
+            for r in my_fees
+        ], use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="ai-panel"><div class="ai-badge">Private student record</div><div class="ai-title">🔐 Only your fees are visible here</div><div class="ai-text">StudySphere filters fee records by your signed-in account and your institution. You cannot view or edit another student’s fee information.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 20 and st.session_state.user_role == "student":
     st.markdown('<div class="page-banner"><div class="page-title">📊 My Attendance</div><div class="page-sub">View attendance across the classes registered to your StudySphere account.</div></div>', unsafe_allow_html=True)
@@ -7417,6 +7516,147 @@ elif st.session_state.page == 13 and st.session_state.user_role in {"university_
         st.info("No institutional activity has been recorded yet.")
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. Faculty AI is now grounded in course material, and University Admin has institutional analytics for course activity and AI usage.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 22 and st.session_state.user_role in {"university_admin", "creator"}:
+    st.markdown('<div class="page-banner"><div class="page-title">💰 Student Fees</div><div class="page-sub">Add and update institution-scoped student fee records. Students can only view their own records.</div></div>', unsafe_allow_html=True)
+
+    institution_id = str(INSTITUTION_ID)
+    fee_students = cursor.execute(
+        "SELECT auth_id, name, email, degree, semester, department FROM users WHERE institution_id = ? AND role = 'student' AND account_status = 'active' ORDER BY name",
+        (institution_id,),
+    ).fetchall()
+
+    total_fee_records = int(cursor.execute("SELECT COUNT(*) FROM student_fees WHERE institution_id = ?", (institution_id,)).fetchone()[0] or 0)
+    total_fee_amount = float(cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM student_fees WHERE institution_id = ?", (institution_id,)).fetchone()[0] or 0)
+    total_fee_paid = float(cursor.execute("SELECT COALESCE(SUM(paid_amount), 0) FROM student_fees WHERE institution_id = ?", (institution_id,)).fetchone()[0] or 0)
+    total_fee_balance = max(0.0, total_fee_amount - total_fee_paid)
+    fm1, fm2, fm3, fm4 = st.columns(4)
+    fm1.metric("Fee records", total_fee_records)
+    fm2.metric("Total billed", f"Rs. {total_fee_amount:,.2f}")
+    fm3.metric("Total paid", f"Rs. {total_fee_paid:,.2f}")
+    fm4.metric("Outstanding", f"Rs. {total_fee_balance:,.2f}")
+
+    if not fee_students:
+        st.info("No active student accounts are available for fee management yet.")
+    else:
+        student_labels = [f"{r[1]} • {r[2]}" for r in fee_students]
+        selected_student_label = st.selectbox("Student", student_labels, key="fees_admin_student_selector")
+        selected_student = fee_students[student_labels.index(selected_student_label)]
+        selected_student_id = str(selected_student[0])
+
+        st.markdown('<div class="panel"><div class="panel-title">➕ Add fee</div><div class="panel-sub">Create a fee record for the selected student. The student will see the saved values in My Fees.</div></div>', unsafe_allow_html=True)
+        add_left, add_right = st.columns(2)
+        with add_left:
+            add_fee_type = st.text_input("Fee type", placeholder="e.g. Tuition Fee", key="fees_add_type")
+            add_term = st.text_input("Semester / term", placeholder="e.g. Fall 2026", key="fees_add_term")
+            add_amount = st.number_input("Total amount (Rs.)", min_value=0.0, step=100.0, value=0.0, key="fees_add_amount")
+            add_paid = st.number_input("Paid amount (Rs.)", min_value=0.0, step=100.0, value=0.0, key="fees_add_paid")
+        with add_right:
+            add_due = st.date_input("Due date", value=date.today(), key="fees_add_due")
+            add_status = st.selectbox("Status", ["Pending", "Partially Paid", "Paid", "Overdue"], key="fees_add_status")
+            add_notes = st.text_area("Admin notes", placeholder="Optional note", key="fees_add_notes")
+        if add_paid > add_amount and add_amount > 0:
+            st.warning("Paid amount cannot be greater than the total amount.")
+        add_fee_button = st.button("💾 Add fee record", key="fees_add_button", use_container_width=True)
+        if add_fee_button:
+            if not add_fee_type.strip():
+                st.error("Enter a fee type.")
+            elif add_amount <= 0:
+                st.error("Enter a total fee amount greater than zero.")
+            elif add_paid > add_amount:
+                st.error("Paid amount cannot be greater than the total amount.")
+            else:
+                now = datetime.now().isoformat(timespec="seconds")
+                fee_id = f"fee-{uuid.uuid4().hex}"
+                cursor.execute(
+                    "INSERT INTO student_fees (id, institution_id, student_id, fee_type, term, amount, paid_amount, due_date, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (fee_id, institution_id, selected_student_id, add_fee_type.strip(), add_term.strip(), float(add_amount), float(add_paid), add_due.isoformat(), add_status, add_notes.strip(), AUTH_ID, now, now),
+                )
+                conn.commit()
+                write_audit_log("student_fee_created", AUTH_ID, st.session_state.user_role, selected_student_id, f"Created {add_fee_type.strip()} fee for {selected_student[1]}")
+                st.success("Fee record added. The student can now see it in My Fees.")
+                st.rerun()
+
+        st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">✏️ Update existing fee</div><div class="panel-sub">Select a fee record for this student and update the amount, payment, due date, status, or notes.</div></div>', unsafe_allow_html=True)
+        existing_fees = cursor.execute(
+            "SELECT id, fee_type, term, amount, paid_amount, due_date, status, notes, created_at, updated_at FROM student_fees WHERE institution_id = ? AND student_id = ? ORDER BY COALESCE(due_date, '9999-12-31'), created_at DESC",
+            (institution_id, selected_student_id),
+        ).fetchall()
+
+        if not existing_fees:
+            st.info("No fee records exist for this student yet.")
+        else:
+            fee_labels = [f"{r[1]} • {r[2] or 'No term'} • Rs. {float(r[3] or 0):,.2f}" for r in existing_fees]
+            selected_fee_label = st.selectbox("Fee record", fee_labels, key="fees_admin_existing_selector")
+            selected_fee = existing_fees[fee_labels.index(selected_fee_label)]
+            fee_id = str(selected_fee[0])
+            update_left, update_right = st.columns(2)
+            with update_left:
+                upd_fee_type = st.text_input("Fee type", value=selected_fee[1] or "", key=f"fees_update_type_{fee_id}")
+                upd_term = st.text_input("Semester / term", value=selected_fee[2] or "", key=f"fees_update_term_{fee_id}")
+                upd_amount = st.number_input("Total amount (Rs.)", min_value=0.0, value=float(selected_fee[3] or 0), step=100.0, key=f"fees_update_amount_{fee_id}")
+                upd_paid = st.number_input("Paid amount (Rs.)", min_value=0.0, value=float(selected_fee[4] or 0), step=100.0, key=f"fees_update_paid_{fee_id}")
+            with update_right:
+                current_due = None
+                if selected_fee[5]:
+                    try:
+                        current_due = date.fromisoformat(str(selected_fee[5]))
+                    except Exception:
+                        current_due = date.today()
+                upd_due = st.date_input("Due date", value=current_due or date.today(), key=f"fees_update_due_{fee_id}")
+                status_options = ["Pending", "Partially Paid", "Paid", "Overdue"]
+                current_status = selected_fee[6] if selected_fee[6] in status_options else "Pending"
+                upd_status = st.selectbox("Status", status_options, index=status_options.index(current_status), key=f"fees_update_status_{fee_id}")
+                upd_notes = st.text_area("Admin notes", value=selected_fee[7] or "", key=f"fees_update_notes_{fee_id}")
+            if upd_paid > upd_amount and upd_amount > 0:
+                st.warning("Paid amount cannot be greater than the total amount.")
+            update_fee_button = st.button("💾 Save fee changes", key=f"fees_update_button_{fee_id}", use_container_width=True)
+            if update_fee_button:
+                if not upd_fee_type.strip():
+                    st.error("Enter a fee type.")
+                elif upd_amount <= 0:
+                    st.error("Total fee amount must be greater than zero.")
+                elif upd_paid > upd_amount:
+                    st.error("Paid amount cannot be greater than the total amount.")
+                else:
+                    now = datetime.now().isoformat(timespec="seconds")
+                    cursor.execute(
+                        "UPDATE student_fees SET fee_type = ?, term = ?, amount = ?, paid_amount = ?, due_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ? AND institution_id = ? AND student_id = ?",
+                        (upd_fee_type.strip(), upd_term.strip(), float(upd_amount), float(upd_paid), upd_due.isoformat(), upd_status, upd_notes.strip(), now, fee_id, institution_id, selected_student_id),
+                    )
+                    cursor.execute(
+                        "INSERT INTO student_fee_history (id, fee_id, institution_id, student_id, changed_by, old_amount, new_amount, old_paid_amount, new_paid_amount, old_status, new_status, change_note, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (f"feeh-{uuid.uuid4().hex}", fee_id, institution_id, selected_student_id, AUTH_ID, float(selected_fee[3] or 0), float(upd_amount), float(selected_fee[4] or 0), float(upd_paid), str(selected_fee[6] or ""), upd_status, "Admin updated fee record", now),
+                    )
+                    conn.commit()
+                    write_audit_log("student_fee_updated", AUTH_ID, st.session_state.user_role, selected_student_id, f"Updated {upd_fee_type.strip()} fee for {selected_student[1]}")
+                    st.success("Fee record updated. The student will see the updated values.")
+                    st.rerun()
+
+            history_rows = cursor.execute(
+                "SELECT changed_at, old_amount, new_amount, old_paid_amount, new_paid_amount, old_status, new_status, change_note FROM student_fee_history WHERE fee_id = ? AND institution_id = ? ORDER BY changed_at DESC",
+                (fee_id, institution_id),
+            ).fetchall()
+            if history_rows:
+                st.markdown("**Change history**")
+                st.dataframe([
+                    {"Changed": r[0], "Amount": f"Rs. {float(r[1] or 0):,.2f} → Rs. {float(r[2] or 0):,.2f}", "Paid": f"Rs. {float(r[3] or 0):,.2f} → Rs. {float(r[4] or 0):,.2f}", "Status": f"{r[5]} → {r[6]}", "Note": r[7] or ""}
+                    for r in history_rows
+                ], use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">👥 Fee records for the institution</div><div class="panel-sub">Only records belonging to this university are shown here.</div></div>', unsafe_allow_html=True)
+        all_fee_rows = cursor.execute(
+            "SELECT sf.fee_type, u.name, u.email, sf.term, sf.amount, sf.paid_amount, sf.due_date, sf.status, sf.updated_at FROM student_fees sf JOIN users u ON u.auth_id = sf.student_id WHERE sf.institution_id = ? ORDER BY u.name, COALESCE(sf.due_date, '9999-12-31')",
+            (institution_id,),
+        ).fetchall()
+        if all_fee_rows:
+            st.dataframe([
+                {"Student": r[1], "Email": r[2], "Fee": r[0], "Term": r[3] or "—", "Amount": f"Rs. {float(r[4] or 0):,.2f}", "Paid": f"Rs. {float(r[5] or 0):,.2f}", "Balance": f"Rs. {fee_balance(r[4], r[5]):,.2f}", "Due": r[6] or "—", "Status": r[7], "Updated": r[8] or "—"}
+                for r in all_fee_rows
+            ], use_container_width=True, hide_index=True)
+        else:
+            st.info("No institution fee records yet.")
 
 elif st.session_state.page == 11 and st.session_state.is_admin:
     st.markdown('<div class="page-banner"><div class="page-title">🔐 Creator Dashboard</div><div class="page-sub">Private creator analytics and read-only access to StudySphere user data and activity.</div></div>', unsafe_allow_html=True)
