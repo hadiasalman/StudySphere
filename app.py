@@ -5394,6 +5394,12 @@ if st.session_state.page == 18 and not has_permission("manage_university"):
 if st.session_state.page == 19 and not (st.session_state.is_admin and st.session_state.user_role == "creator"):
     st.session_state.page = 1
     st.rerun()
+if st.session_state.page == 21 and st.session_state.user_role != "student":
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page == 22 and not has_permission("manage_university"):
+    st.session_state.page = 1
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown('<div class="sidebar-label">Intelligence</div>', unsafe_allow_html=True)
@@ -7567,11 +7573,12 @@ elif st.session_state.page == 22 and st.session_state.user_role in {"university_
             elif add_paid > add_amount:
                 st.error("Paid amount cannot be greater than the total amount.")
             else:
+                stored_status = "Overdue" if add_status == "Overdue" and add_paid < add_amount else fee_status_from_amounts(add_amount, add_paid)
                 now = datetime.now().isoformat(timespec="seconds")
                 fee_id = f"fee-{uuid.uuid4().hex}"
                 cursor.execute(
                     "INSERT INTO student_fees (id, institution_id, student_id, fee_type, term, amount, paid_amount, due_date, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (fee_id, institution_id, selected_student_id, add_fee_type.strip(), add_term.strip(), float(add_amount), float(add_paid), add_due.isoformat(), add_status, add_notes.strip(), AUTH_ID, now, now),
+                    (fee_id, institution_id, selected_student_id, add_fee_type.strip(), add_term.strip(), float(add_amount), float(add_paid), add_due.isoformat(), stored_status, add_notes.strip(), AUTH_ID, now, now),
                 )
                 conn.commit()
                 write_audit_log("student_fee_created", AUTH_ID, st.session_state.user_role, selected_student_id, f"Created {add_fee_type.strip()} fee for {selected_student[1]}")
@@ -7620,14 +7627,15 @@ elif st.session_state.page == 22 and st.session_state.user_role in {"university_
                 elif upd_paid > upd_amount:
                     st.error("Paid amount cannot be greater than the total amount.")
                 else:
+                    stored_status = "Overdue" if upd_status == "Overdue" and upd_paid < upd_amount else fee_status_from_amounts(upd_amount, upd_paid)
                     now = datetime.now().isoformat(timespec="seconds")
                     cursor.execute(
                         "UPDATE student_fees SET fee_type = ?, term = ?, amount = ?, paid_amount = ?, due_date = ?, status = ?, notes = ?, updated_at = ? WHERE id = ? AND institution_id = ? AND student_id = ?",
-                        (upd_fee_type.strip(), upd_term.strip(), float(upd_amount), float(upd_paid), upd_due.isoformat(), upd_status, upd_notes.strip(), now, fee_id, institution_id, selected_student_id),
+                        (upd_fee_type.strip(), upd_term.strip(), float(upd_amount), float(upd_paid), upd_due.isoformat(), stored_status, upd_notes.strip(), now, fee_id, institution_id, selected_student_id),
                     )
                     cursor.execute(
                         "INSERT INTO student_fee_history (id, fee_id, institution_id, student_id, changed_by, old_amount, new_amount, old_paid_amount, new_paid_amount, old_status, new_status, change_note, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (f"feeh-{uuid.uuid4().hex}", fee_id, institution_id, selected_student_id, AUTH_ID, float(selected_fee[3] or 0), float(upd_amount), float(selected_fee[4] or 0), float(upd_paid), str(selected_fee[6] or ""), upd_status, "Admin updated fee record", now),
+                        (f"feeh-{uuid.uuid4().hex}", fee_id, institution_id, selected_student_id, AUTH_ID, float(selected_fee[3] or 0), float(upd_amount), float(selected_fee[4] or 0), float(upd_paid), str(selected_fee[6] or ""), stored_status, "Admin updated fee record", now),
                     )
                     conn.commit()
                     write_audit_log("student_fee_updated", AUTH_ID, st.session_state.user_role, selected_student_id, f"Updated {upd_fee_type.strip()} fee for {selected_student[1]}")
