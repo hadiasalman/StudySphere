@@ -653,7 +653,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS course_materials (id TEXT PRIMARY KEY
 cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, faculty_id TEXT NOT NULL, action_type TEXT NOT NULL, instructions TEXT, output_text TEXT NOT NULL, source_names TEXT, created_at TEXT NOT NULL)")
 
 # ============================================================
-# UNIVERSITY KNOWLEDGE PLATFORM (STEP 8)
+# UNIVERSITY KNOWLEDGE PLATFORM
 # ============================================================
 # Institutional knowledge is separate from personal student documents and
 # course teaching material. Scope is enforced by institution + department
@@ -661,7 +661,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY K
 cursor.execute("CREATE TABLE IF NOT EXISTS university_knowledge_sources (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, scope_type TEXT NOT NULL DEFAULT 'university', department_id TEXT, category TEXT NOT NULL DEFAULT 'General', title TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, file_hash TEXT NOT NULL, uploaded_by TEXT NOT NULL, uploaded_at TEXT NOT NULL, active INTEGER DEFAULT 1)")
 
 # ============================================================
-# INTEGRATION FOUNDATION (STEP 9)
+# INTEGRATION FOUNDATION
 # ============================================================
 # The integration layer is deliberately additive: existing StudySphere
 # student/faculty/course data remains intact, while external LMS/SIS identity
@@ -691,14 +691,14 @@ cursor.execute("UPDATE course_sections SET section_name = name WHERE (section_na
 conn.commit()
 
 # ============================================================
-# INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT (STEP 10)
+# INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT
 # ============================================================
 # Support cases are human-review records. They are not automated diagnoses or
 # predictions about a student's ability, health, or future performance.
 cursor.execute("CREATE TABLE IF NOT EXISTS academic_support_cases (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, student_id TEXT NOT NULL, course_id TEXT, source_type TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolution_note TEXT DEFAULT '', resolved_at TEXT)")
 
 # ============================================================
-# STUDENT FEES MANAGEMENT (STEP 16)
+# STUDENT FEES MANAGEMENT
 # ============================================================
 # Fees are institution-scoped and student-specific. University Admin/Creator
 # accounts can create and update them; students can only read their own fees.
@@ -759,7 +759,7 @@ def database_health():
 
 
 # ============================================================
-# STEP 11 HELPERS — DEPLOYMENT, BACKUP + UNIVERSITY PILOT
+# DEPLOYMENT, BACKUP + UNIVERSITY PILOT
 # ============================================================
 
 STEP11_VERSION = "12.0"
@@ -945,7 +945,7 @@ def deployment_bundle_bytes(base_url=""):
         b"pyinstaller --onefile --name StudySphereLauncher StudySphereLauncher.py\r\n"
     )
     bundle["DEPLOYMENT_README.md"] = (
-        f"# StudySphere Campus — Step 11\n\nRelease: {STEP11_VERSION}\n\n"
+        f"# StudySphere Campus\n\nRelease: {STEP11_VERSION}\n\n"
         "Use PostgreSQL for production, keep secrets in deployment secrets, configure SSO, configure persistent file storage, and set up scheduled database backups.\n\n"
         "The optional Windows launcher opens the central StudySphere service; it does not create a separate local database.\n"
     ).encode("utf-8")
@@ -968,7 +968,7 @@ def pilot_readiness_summary():
 
 
 # ============================================================
-# STEP 10 HELPERS — INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT
+# INSTITUTIONAL ANALYTICS + ACADEMIC SUPPORT
 # ============================================================
 
 def _step10_now():
@@ -1171,7 +1171,7 @@ def step10_generate_report_csv(institution_id, course_quality_rows, support_rows
 
 
 # ============================================================
-# INTEGRATION HELPERS — STEP 9
+# INTEGRATION HELPERS
 # ============================================================
 
 INTEGRATION_TYPES = {
@@ -1523,7 +1523,7 @@ def _csv_bytes(rows, fieldnames):
 
 
 def ensure_step9_integration_tables():
-    """Self-heal Step 9 integration tables on existing SQLite deployments.
+    """Self-heal integration tables on existing SQLite deployments.
 
     Streamlit Cloud can keep an older studysphere.db between deployments.  A
     CREATE TABLE IF NOT EXISTS statement does not add newly introduced
@@ -6534,7 +6534,7 @@ elif st.session_state.page == 16:
             else:
                 st.info("No institutional knowledge sources have been published yet.")
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">Step 8 • University Knowledge</div><div class="ai-title">🏫 StudySphere now has an institutional knowledge layer</div><div class="ai-text">University Admin and Creator can publish approved institutional knowledge. Students and faculty retrieve only knowledge authorized by institution and department scope, while the existing course-level authorization remains active. Grounded AI responses identify the retrieved source names and are instructed to refuse unsupported claims.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Knowledge</div><div class="ai-title">🏫 StudySphere now has an institutional knowledge layer</div><div class="ai-text">University Admin and Creator can publish approved institutional knowledge. Students and faculty retrieve only knowledge authorized by institution and department scope, while the existing course-level authorization remains active. Grounded AI responses identify the retrieved source names and are instructed to refuse unsupported claims.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 14:
     university_role_label = role_label(st.session_state.user_role)
@@ -7195,7 +7195,7 @@ elif st.session_state.page == 17 and st.session_state.user_role in {"university_
         else:
             st.info("No integration synchronization has been run yet.")
 
-        st.markdown('<div class="ai-panel"><div class="ai-badge">Step 9 • Institutional Integrations</div><div class="ai-title">🔗 StudySphere is ready to exchange university identity and roster data</div><div class="ai-text">University SSO diagnostics, OneRoster 1.2 CSV import/export, external-ID mappings, LTI platform registrations, and synchronization history are now part of the institutional administration layer.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="ai-panel"><div class="ai-badge">Institutional Integrations</div><div class="ai-title">🔗 StudySphere is ready to exchange university identity and roster data</div><div class="ai-text">University SSO diagnostics, OneRoster 1.2 CSV import/export, external-ID mappings, LTI platform registrations, and synchronization history are now part of the institutional administration layer.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 18 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">📈 Institutional Analytics</div><div class="page-sub">University-wide reporting and human-review academic support signals built from authorized StudySphere data.</div></div>', unsafe_allow_html=True)
@@ -7364,7 +7364,7 @@ elif st.session_state.page == 18 and st.session_state.user_role in {"university_
         key="step10_report_download",
     )
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">Step 10 • Institutional Analytics + Academic Support</div><div class="ai-title">📈 Measure the institution, support people with humans in the loop</div><div class="ai-text">StudySphere now combines institutional reporting with operational and activity signals. Support cases are explicitly human-review records; the system does not make automated decisions about a student’s ability, health, or future.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Institutional Analytics + Academic Support</div><div class="ai-title">📈 Measure the institution, support people with humans in the loop</div><div class="ai-text">StudySphere now combines institutional reporting with operational and activity signals. Support cases are explicitly human-review records; the system does not make automated decisions about a student’s ability, health, or future.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 13 and st.session_state.user_role in {"university_admin", "creator"}:
     st.markdown('<div class="page-banner"><div class="page-title">🏫 University Admin</div><div class="page-sub">Configure the institution, organize departments and courses, assign faculty, and enroll students.</div></div>', unsafe_allow_html=True)
@@ -7724,7 +7724,7 @@ elif st.session_state.page == 13 and st.session_state.user_role in {"university_
     else:
         st.info("No institutional activity has been recorded yet.")
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition • Step 2</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. Faculty AI is now grounded in course material, and University Admin has institutional analytics for course activity and AI usage.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">University Edition</div><div class="ai-title">🏫 The institutional layer is now in place</div><div class="ai-text">University Admin can create departments and courses, assign faculty, and enroll students. Faculty can manage their assigned course material and course-level assignments. Faculty AI is now grounded in course material, and University Admin has institutional analytics for course activity and AI usage.</div></div>', unsafe_allow_html=True)
 
 
 elif st.session_state.page == 22 and st.session_state.user_role in {"university_admin", "creator"}:
@@ -7893,7 +7893,7 @@ elif st.session_state.page == 11 and st.session_state.is_admin:
     m6.metric("Documents", total_documents)
 
     # ========================================================
-    # STEP 7 — PRODUCTION HEALTH / DEPLOYMENT FOUNDATION
+    # PRODUCTION HEALTH / DEPLOYMENT FOUNDATION
     # ========================================================
     db_ok, db_label = database_health()
     health_icon = "🟢" if db_ok else "🔴"
@@ -8227,11 +8227,11 @@ elif st.session_state.page == 19 and st.session_state.is_admin and st.session_st
         "Document university support contacts and escalation procedures.",
     ]
     st.dataframe([
-        {"Pilot step": idx + 1, "Validation": item}
-        for idx, item in enumerate(pilot_items)
+        {"Validation": item}
+        for item in pilot_items
     ], use_container_width=True, hide_index=True)
 
-    st.markdown('<div class="ai-panel"><div class="ai-badge">Step 11 • Production + Pilot</div><div class="ai-title">🏫 StudySphere Campus is ready for controlled institutional deployment</div><div class="ai-text">Deployment diagnostics, safe SQLite backup support, production configuration templates, a pilot package, and an optional Windows launcher are now part of the platform. The launcher opens the central service instead of creating a separate local data silo.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Production + Pilot</div><div class="ai-title">🏫 StudySphere Campus is ready for controlled institutional deployment</div><div class="ai-text">Deployment diagnostics, safe SQLite backup support, production configuration templates, a pilot package, and an optional Windows launcher are now part of the platform. The launcher opens the central service instead of creating a separate local data silo.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 10:
     st.markdown('<div class="page-banner"><div class="page-title">🔄 Document Converter</div><div class="page-sub">Convert your study documents between PDF, DOCX, TXT, and Markdown in one clean workspace.</div></div>', unsafe_allow_html=True)
