@@ -20,6 +20,11 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+try:
     from pypdf import PdfReader
 except Exception:
     PdfReader = None
@@ -133,6 +138,9 @@ if "reset_recovery_code" not in st.session_state:
 
 if "step11_package" not in st.session_state:
     st.session_state.step11_package = None
+
+if "image_compressor_results" not in st.session_state:
+    st.session_state.image_compressor_results = []
 
 # ============================================================
 # DATABASE / PRODUCTION FOUNDATION
@@ -621,6 +629,7 @@ def deployment_preflight_checks():
         "python-docx": "docx",
         "reportlab": "reportlab",
         "python-pptx": "pptx",
+        "Pillow": "PIL",
         "Authlib": "authlib",
     }
     missing = []
@@ -679,6 +688,7 @@ def deployment_manifest():
             "lti_registration_storage": True,
             "institutional_analytics": True,
             "academic_support_queue": True,
+            "image_compressor": True,
             "class_registration": True,
             "attendance_tracking": True,
         },
@@ -704,6 +714,7 @@ def deployment_bundle_bytes(base_url=""):
         "python-docx>=1.1\n"
         "reportlab>=4.2\n"
         "python-pptx>=1.0\n"
+        "Pillow>=10.0\n"
         "Authlib>=1.3.2\n"
         "psycopg[binary]>=3.2\n"
     ).encode("utf-8")
@@ -3254,8 +3265,13 @@ def reset_chat_interaction_id(chat_id, user_id):
 # ============================================================
 
 STUDYSPHERE_AGENT_MODELS = [
+    # Current stable Flash models, ordered from newest to older fallback.
+    # 3.8 Flash is Google's current recommended Flash model for autonomous
+    # agents and complex multi-step workflows.
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
 ]
 
@@ -3767,23 +3783,50 @@ def stream_studysphere_agent(api_key, chat_id, user_id, chat_messages, academic_
                 if model_index + 1 < len(STUDYSPHERE_AGENT_MODELS):
                     model_index += 1
                     model = STUDYSPHERE_AGENT_MODELS[model_index]
-                    previous_id = ""
                     retried_without_previous = False
                     continue
                 yield "Gemini could not use any of the configured StudySphere Agent models."
                 return
+
             if error_code in (401, 403):
                 yield "The StudySphere Agent could not authenticate the Gemini API request. Check the Gemini API key configured for StudySphere."
                 return
+
+            # A 503 commonly means temporary model capacity / high demand.
+            # Try the next configured model instead of failing the entire agent.
+            # The Interactions API supports mixing models within a conversation,
+            # so an existing previous_interaction_id can safely be continued.
+            if error_code in (408, 500, 502, 503, 504):
+                if model_index + 1 < len(STUDYSPHERE_AGENT_MODELS):
+                    model_index += 1
+                    model = STUDYSPHERE_AGENT_MODELS[model_index]
+                    retried_without_previous = False
+                    continue
+                yield f"The StudySphere Agent is temporarily unavailable: {error_message}"
+                return
+
+            # 429 can mean either quota/rate limiting or temporary capacity.
+            # Only fall back when Google's message looks like a capacity spike;
+            # otherwise avoid sending extra requests that could worsen a quota issue.
             if error_code == 429:
+                capacity_markers = (
+                    "high demand", "overloaded", "capacity", "temporarily unavailable",
+                    "try again later", "resource exhausted",
+                )
+                message_lower = str(error_message or "").lower()
+                is_capacity_spike = any(marker in message_lower for marker in capacity_markers)
+                if is_capacity_spike and model_index + 1 < len(STUDYSPHERE_AGENT_MODELS):
+                    model_index += 1
+                    model = STUDYSPHERE_AGENT_MODELS[model_index]
+                    retried_without_previous = False
+                    continue
                 yield "Gemini rate limit reached. Please wait a little and try again."
                 return
+
             if error_code == 400:
                 yield f"The StudySphere Agent rejected the request: {error_message}"
                 return
-            if error_code in (408, 500, 502, 503, 504):
-                yield f"The StudySphere Agent is temporarily unavailable: {error_message}"
-                return
+
             yield f"The StudySphere Agent encountered an error: {error_message}"
             return
 
@@ -5583,6 +5626,136 @@ def convert_document_format(file_bytes, file_name, output_format, title):
     return output_bytes, extension, mime, len(text_value)
 
 
+# ============================================================
+# IMAGE COMPRESSOR
+# ============================================================
+
+def _image_safe_stem(file_name):
+    stem = re.sub(r"\.[A-Za-z0-9]{1,8}$", "", str(file_name or "Image"))
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return stem or "StudySphere_Image"
+
+
+def compress_image_bytes(file_bytes, file_name, output_format="Auto", quality=82, max_dimension=0, target_mb=2.0):
+    """Compress one image locally with Pillow and return bytes plus metadata.
+
+    The function never calls Gemini. It preserves transparency when using WebP/PNG,
+    converts unsupported color modes safely, and progressively reduces dimensions
+    when a target size is supplied.
+    """
+    if Image is None:
+        raise RuntimeError("Pillow is not installed. Add Pillow>=10.0 to requirements.txt and redeploy StudySphere.")
+
+    source_bytes = bytes(file_bytes or b"")
+    if not source_bytes:
+        raise ValueError("The selected image is empty.")
+
+    try:
+        source_image = Image.open(io.BytesIO(source_bytes))
+        source_image.load()
+    except Exception as exc:
+        raise ValueError("The selected file is not a valid supported image.") from exc
+
+    source_format = str(source_image.format or "PNG").upper()
+    source_mode = source_image.mode
+    has_alpha = "A" in source_image.getbands() or source_mode in {"LA", "RGBA"}
+    requested_format = str(output_format or "Auto").strip().upper()
+
+    if requested_format == "AUTO":
+        if source_format in {"JPEG", "JPG"} and not has_alpha:
+            final_format = "JPEG"
+        elif source_format == "PNG" and has_alpha:
+            final_format = "WEBP"
+        elif source_format == "WEBP":
+            final_format = "WEBP"
+        else:
+            final_format = "JPEG" if not has_alpha else "WEBP"
+    elif requested_format in {"JPG", "JPEG"}:
+        final_format = "JPEG"
+    elif requested_format in {"PNG", "WEBP"}:
+        final_format = requested_format
+    else:
+        raise ValueError("Unsupported output format.")
+
+    working = source_image.copy()
+    original_size = working.size
+    max_dimension = int(max(0, max_dimension or 0))
+    if max_dimension and max(working.size) > max_dimension:
+        scale = max_dimension / float(max(working.size))
+        new_size = (max(1, int(round(working.width * scale))), max(1, int(round(working.height * scale))))
+        working = working.resize(new_size, Image.Resampling.LANCZOS)
+
+    quality = max(35, min(95, int(quality or 82)))
+    target_bytes = int(max(0.1, float(target_mb or 2.0)) * 1024 * 1024)
+
+    def encode_image(image_obj, fmt, current_quality):
+        output = io.BytesIO()
+        if fmt == "JPEG":
+            if image_obj.mode in {"RGBA", "LA", "P"} or "A" in image_obj.getbands():
+                rgba = image_obj.convert("RGBA")
+                background = Image.new("RGB", rgba.size, "white")
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                image_to_save = background
+            elif image_obj.mode != "RGB":
+                image_to_save = image_obj.convert("RGB")
+            else:
+                image_to_save = image_obj
+            image_to_save.save(output, format="JPEG", quality=current_quality, optimize=True, progressive=True)
+        elif fmt == "WEBP":
+            image_obj.save(output, format="WEBP", quality=current_quality, method=6, lossless=False)
+        elif fmt == "PNG":
+            png_image = image_obj
+            if png_image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I", "I;16", "F"}:
+                png_image = png_image.convert("RGBA" if has_alpha else "RGB")
+            png_image.save(output, format="PNG", optimize=True, compress_level=9)
+        return output.getvalue()
+
+    # First attempt with the requested format and quality.
+    compressed = encode_image(working, final_format, quality)
+
+    # For lossy formats, progressively reduce quality until the target is reached.
+    if len(compressed) > target_bytes and final_format in {"JPEG", "WEBP"}:
+        for current_quality in range(quality - 5, 29, -5):
+            candidate = encode_image(working, final_format, current_quality)
+            if len(candidate) < len(compressed):
+                compressed = candidate
+            if len(compressed) <= target_bytes:
+                break
+
+    # If still too large, progressively downscale while maintaining aspect ratio.
+    attempts = 0
+    while len(compressed) > target_bytes and max(working.size) > 256 and attempts < 8:
+        factor = 0.82
+        new_size = (max(1, int(working.width * factor)), max(1, int(working.height * factor)))
+        working = working.resize(new_size, Image.Resampling.LANCZOS)
+        compressed = encode_image(working, final_format, max(35, quality - 10))
+        attempts += 1
+
+    # PNG cannot use JPEG/WebP's quality slider, so if an optimized PNG is still
+    # above target, transparently switch Auto mode to WebP for a substantially smaller file.
+    if len(compressed) > target_bytes and final_format == "PNG" and requested_format == "AUTO":
+        final_format = "WEBP"
+        compressed = encode_image(working, final_format, quality)
+
+    extension = "jpg" if final_format == "JPEG" else final_format.lower()
+    mime = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}[final_format]
+    saved_size = len(compressed)
+    savings = max(0.0, (1.0 - (saved_size / max(1, len(source_bytes)))) * 100.0)
+
+    return {
+        "bytes": compressed,
+        "extension": extension,
+        "mime": mime,
+        "format": final_format,
+        "original_name": str(file_name or "image"),
+        "original_bytes": len(source_bytes),
+        "compressed_bytes": saved_size,
+        "savings_percent": savings,
+        "original_dimensions": original_size,
+        "final_dimensions": working.size,
+    }
+
+
 def clear_authenticated_user():
     if st.session_state.get("auth_id"):
         write_audit_log("logout", str(st.session_state.get("auth_id")), st.session_state.get("user_role", "student"), str(st.session_state.get("auth_id")), "User signed out")
@@ -5947,6 +6120,7 @@ nav_options = [
     (8, "🤖  AI Agent"),
     (9, "📊  Presentation Studio"),
     (10, "🔄  Document Converter"),
+    (23, "🖼️  Image Compressor"),
     (14, "🎓  My University"),
     (16, "🏛️  University Knowledge AI"),
 ]
@@ -6025,6 +6199,9 @@ if st.sidebar.button("📊 Presentation Studio", key="presentation_studio_sideba
     st.rerun()
 if st.sidebar.button("🔄 Document Converter", key="document_converter_sidebar", use_container_width=True):
     st.session_state.page = 10
+    st.rerun()
+if st.sidebar.button("🖼️ Image Compressor", key="image_compressor_sidebar", use_container_width=True):
+    st.session_state.page = 23
     st.rerun()
 if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_container_width=True):
     st.session_state.page = 14
@@ -8718,6 +8895,123 @@ elif st.session_state.page == 10:
             st.rerun()
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Document tools</div><div class="ai-title">Clean conversion for study material</div><div class="ai-text">For PDF and DOCX files, StudySphere extracts readable text and rebuilds it in the format you choose. Original complex page layouts, embedded images, and advanced Word/PDF styling are not preserved in this lightweight converter.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 23:
+    st.markdown('<div class="page-banner"><div class="page-title">🖼️ Image Compressor</div><div class="page-sub">Reduce image file size for assignments, uploads, websites, and social posts — directly inside StudySphere.</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel"><div class="panel-title">Compress your images</div><div class="panel-sub">All compression happens locally with Pillow. Your images are not sent to Gemini and this feature does not use AI quota.</div></div>', unsafe_allow_html=True)
+
+    image_files = st.file_uploader(
+        "Upload image files",
+        type=["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"],
+        accept_multiple_files=True,
+        key="image_compressor_upload",
+        help="Supported formats: JPG, JPEG, PNG, WEBP, BMP, TIFF.",
+    )
+
+    option_left, option_mid, option_right = st.columns(3)
+    with option_left:
+        compressor_format = st.selectbox(
+            "Output format",
+            ["Auto", "JPG", "WEBP", "PNG"],
+            key="image_compressor_format",
+            help="Auto chooses a practical compressed format while preserving transparency when needed.",
+        )
+    with option_mid:
+        compressor_quality = st.slider(
+            "Quality", min_value=35, max_value=95, value=82, step=1,
+            key="image_compressor_quality",
+            help="Higher quality produces larger files. This setting mainly affects JPG and WEBP.",
+        )
+    with option_right:
+        compressor_target_mb = st.number_input(
+            "Target max size (MB)", min_value=0.1, max_value=20.0, value=2.0, step=0.1,
+            key="image_compressor_target_mb",
+            help="StudySphere will reduce dimensions further when necessary to approach this limit.",
+        )
+
+    dimension_options = {
+        "Keep original": 0,
+        "Max 3000 px": 3000,
+        "Max 2048 px": 2048,
+        "Max 1600 px": 1600,
+        "Max 1200 px": 1200,
+        "Max 800 px": 800,
+    }
+    compressor_dimension_label = st.selectbox(
+        "Maximum image dimension", list(dimension_options.keys()), key="image_compressor_dimension"
+    )
+    compressor_max_dimension = dimension_options[compressor_dimension_label]
+
+    compress_button = st.button(
+        "🗜️ Compress images", key="compress_images_button", use_container_width=True
+    )
+
+    if compress_button:
+        st.session_state.image_compressor_results = []
+        if not image_files:
+            st.warning("Please upload at least one image first.")
+        else:
+            progress = st.progress(0)
+            for index, image_file in enumerate(image_files):
+                try:
+                    result = compress_image_bytes(
+                        image_file.getvalue(),
+                        image_file.name,
+                        output_format=compressor_format,
+                        quality=compressor_quality,
+                        max_dimension=compressor_max_dimension,
+                        target_mb=compressor_target_mb,
+                    )
+                    result["download_name"] = f"{_image_safe_stem(image_file.name)}_compressed.{result['extension']}"
+                    st.session_state.image_compressor_results.append(result)
+                except Exception as exc:
+                    st.error(f"Could not compress {image_file.name}: {type(exc).__name__}: {exc}")
+                progress.progress((index + 1) / max(1, len(image_files)))
+            progress.empty()
+
+    results = st.session_state.get("image_compressor_results", [])
+    if results:
+        total_original = sum(item["original_bytes"] for item in results)
+        total_compressed = sum(item["compressed_bytes"] for item in results)
+        total_savings = max(0.0, (1.0 - (total_compressed / max(1, total_original))) * 100.0)
+
+        summary1, summary2, summary3 = st.columns(3)
+        summary1.metric("Images compressed", len(results))
+        summary2.metric("Original size", f"{total_original / 1024 / 1024:.2f} MB")
+        summary3.metric("Compressed size", f"{total_compressed / 1024 / 1024:.2f} MB")
+        st.caption(f"Overall size reduction: {total_savings:.1f}%")
+
+        for index, item in enumerate(results):
+            before_kb = item["original_bytes"] / 1024
+            after_kb = item["compressed_bytes"] / 1024
+            st.markdown(
+                f'<div class="panel" style="margin-top:14px;"><div class="panel-title">✅ {item["original_name"]}</div>'
+                f'<div class="panel-sub">{item["format"]} • {item["original_dimensions"][0]}×{item["original_dimensions"][1]} → {item["final_dimensions"][0]}×{item["final_dimensions"][1]} • {before_kb:.1f} KB → {after_kb:.1f} KB • {item["savings_percent"]:.1f}% smaller</div></div>',
+                unsafe_allow_html=True,
+            )
+            preview_left, preview_right = st.columns(2)
+            with preview_left:
+                st.image(item["bytes"], caption="Compressed preview", use_container_width=True)
+            with preview_right:
+                st.download_button(
+                    "⬇️ Download compressed image",
+                    data=item["bytes"],
+                    file_name=item["download_name"],
+                    mime=item["mime"],
+                    use_container_width=True,
+                    key=f"download_compressed_image_{index}_{item['download_name']}",
+                )
+                st.caption(
+                    f"Format: {item['format']}  •  Final size: {after_kb:.1f} KB  •  "
+                    f"Reduction: {item['savings_percent']:.1f}%"
+                )
+
+        if st.button("🗑️ Clear compression results", key="clear_image_compressor_results", use_container_width=True):
+            st.session_state.image_compressor_results = []
+            st.rerun()
+
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Image tools</div><div class="ai-title">Fast local image compression</div><div class="ai-text">JPG and WEBP support quality-based compression. PNG is optimized losslessly; when Auto mode is used, StudySphere can switch to WEBP when that produces a smaller result. Transparent images are kept transparent in WEBP/PNG output.</div></div>', unsafe_allow_html=True)
 
 st.markdown('<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">StudySphere • Learn smarter. Plan better. Achieve more.</div>', unsafe_allow_html=True)
 
