@@ -15,10 +15,8 @@ import csv
 import sqlite3
 import uuid
 import zipfile
-import smtplib
-from email.message import EmailMessage
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
@@ -342,14 +340,6 @@ if "signup_recovery_code" not in st.session_state:
 if "reset_recovery_code" not in st.session_state:
     st.session_state.reset_recovery_code = ""
 
-if "signup_email_verification_id" not in st.session_state:
-    st.session_state.signup_email_verification_id = ""
-
-if "signup_email_verified" not in st.session_state:
-    st.session_state.signup_email_verified = ""
-
-if "signup_email_verification_sent_at" not in st.session_state:
-    st.session_state.signup_email_verification_sent_at = 0.0
 
 if "step11_package" not in st.session_state:
     st.session_state.step11_package = None
@@ -544,17 +534,6 @@ except Exception as exc:
 
 cursor.execute("CREATE TABLE IF NOT EXISTS users (auth_id TEXT PRIMARY KEY, name TEXT, email TEXT UNIQUE, university TEXT, degree TEXT, semester TEXT, career_goal TEXT, skills TEXT, study_preferences TEXT, password_hash TEXT, password_salt TEXT, recovery_hash TEXT, recovery_salt TEXT, gemini_api_key TEXT, is_admin INTEGER DEFAULT 0, created_at TEXT, last_login_at TEXT, last_seen_at TEXT, password_changed_at TEXT, role TEXT DEFAULT 'student', institution_id TEXT, department TEXT, auth_provider TEXT DEFAULT 'local', oidc_subject TEXT, last_auth_method TEXT DEFAULT 'local', account_status TEXT DEFAULT 'active')")
 cursor.execute("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
-cursor.execute("""CREATE TABLE IF NOT EXISTS email_verifications (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    code_salt TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    verified_at TEXT,
-    used INTEGER NOT NULL DEFAULT 0
-)""")
 cursor.execute("CREATE TABLE IF NOT EXISTS institutions (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id TEXT, actor_role TEXT, action TEXT NOT NULL, target_user_id TEXT, details TEXT, created_at TEXT NOT NULL)")
 cursor.execute("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, gemini_interaction_id TEXT)")
@@ -769,8 +748,8 @@ conn.commit()
 # administrators a single place to see the application schema generation.
 cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)")
 cursor.execute("""CREATE TABLE IF NOT EXISTS agent_action_logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, tool_name TEXT NOT NULL, arguments_json TEXT NOT NULL, result_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)""")
-SCHEMA_VERSION = 17
-SCHEMA_DESCRIPTION = "Email verification for local account creation"
+SCHEMA_VERSION = 16
+SCHEMA_DESCRIPTION = "Agentic AI tool-calling academic workflows"
 existing_schema_version = cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,)).fetchone()
 if not existing_schema_version:
     cursor.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)", (SCHEMA_VERSION, SCHEMA_DESCRIPTION, datetime.now().isoformat(timespec="seconds")))
@@ -802,7 +781,6 @@ def deployment_secret_status():
         "Gemini API key": bool(GLOBAL_GEMINI_API_KEY),
         "Database URL": bool(DATABASE_URL),
         "University SSO": bool(university_sso_configured()) if "university_sso_configured" in globals() else False,
-        "Email verification": email_verification_configured() if "email_verification_configured" in globals() else False,
     }
 
 
@@ -882,11 +860,6 @@ def deployment_preflight_checks():
         "Details": "OIDC provider detected" if secrets_status["University SSO"] else "Not configured; local login remains available.",
     })
 
-    checks.append({
-        "Check": "Email verification",
-        "Status": "PASS" if secrets_status["Email verification"] else "WARN",
-        "Details": "SMTP email delivery is configured" if secrets_status["Email verification"] else "Not configured; local account creation cannot verify email addresses.",
-    })
 
     checks.append({
         "Check": "Backup strategy",
@@ -922,7 +895,6 @@ def deployment_manifest():
             "academic_support_queue": True,
             "class_registration": True,
             "attendance_tracking": True,
-            "email_verification": True,
         },
         "preflight": deployment_preflight_checks(),
         "secret_values_included": False,
@@ -955,13 +927,6 @@ def deployment_bundle_bytes(base_url=""):
         "# DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/studysphere\n"
         "# GEMINI_API_KEY=YOUR_GEMINI_API_KEY\n"
         "STUDYSPHERE_STORAGE_DIR=studysphere_data\n"
-        "# EMAIL_SMTP_HOST=smtp.gmail.com\n"
-        "# EMAIL_SMTP_PORT=587\n"
-        "# EMAIL_SMTP_USERNAME=your-email@example.com\n"
-        "# EMAIL_SMTP_PASSWORD=your-app-password\n"
-        "# EMAIL_FROM_EMAIL=your-email@example.com\n"
-        "# EMAIL_FROM_NAME=StudySphere\n"
-        "# EMAIL_USE_TLS=true\n"
     ).encode("utf-8")
 
     bundle[".streamlit/config.toml"] = (
@@ -3051,240 +3016,6 @@ def clean_email(value):
 def valid_email(value):
     return bool(EMAIL_PATTERN.fullmatch(clean_email(value)))
 
-
-EMAIL_VERIFICATION_EXPIRY_MINUTES = 10
-EMAIL_VERIFICATION_MAX_ATTEMPTS = 5
-EMAIL_VERIFICATION_RESEND_SECONDS = 60
-
-
-def configured_email_setting(name, default=""):
-    aliases = {
-        "EMAIL_SMTP_HOST": ["STUDYSPHERE_SMTP_HOST"],
-        "EMAIL_SMTP_PORT": ["STUDYSPHERE_SMTP_PORT"],
-        "EMAIL_SMTP_USERNAME": ["STUDYSPHERE_SMTP_USERNAME"],
-        "EMAIL_SMTP_PASSWORD": ["STUDYSPHERE_SMTP_PASSWORD"],
-        "EMAIL_FROM_EMAIL": ["STUDYSPHERE_FROM_EMAIL"],
-        "EMAIL_FROM_NAME": ["STUDYSPHERE_FROM_NAME"],
-        "EMAIL_USE_TLS": ["STUDYSPHERE_SMTP_USE_TLS"],
-    }
-    value = os.getenv(name, "")
-    if not value:
-        for alias in aliases.get(name, []):
-            value = os.getenv(alias, "")
-            if value:
-                break
-    try:
-        secret_value = st.secrets.get(name, "")
-        if secret_value:
-            value = secret_value
-    except Exception:
-        pass
-    if not value:
-        for alias in aliases.get(name, []):
-            try:
-                secret_value = st.secrets.get(alias, "")
-                if secret_value:
-                    value = secret_value
-                    break
-            except Exception:
-                pass
-    return str(value or default).strip()
-
-
-def email_verification_configured():
-    return bool(
-        configured_email_setting("EMAIL_SMTP_HOST")
-        and configured_email_setting("EMAIL_SMTP_PORT", "587")
-        and configured_email_setting("EMAIL_SMTP_USERNAME")
-        and configured_email_setting("EMAIL_SMTP_PASSWORD")
-        and configured_email_setting("EMAIL_FROM_EMAIL")
-    )
-
-
-def send_studysphere_verification_email(recipient_email, verification_code):
-    recipient_email = clean_email(recipient_email)
-    smtp_host = configured_email_setting("EMAIL_SMTP_HOST")
-    smtp_port_raw = configured_email_setting("EMAIL_SMTP_PORT", "587")
-    smtp_username = configured_email_setting("EMAIL_SMTP_USERNAME")
-    smtp_password = configured_email_setting("EMAIL_SMTP_PASSWORD")
-    from_email = configured_email_setting("EMAIL_FROM_EMAIL", smtp_username)
-    from_name = configured_email_setting("EMAIL_FROM_NAME", "StudySphere")
-    use_tls_raw = configured_email_setting("EMAIL_USE_TLS", "true").lower()
-    use_tls = use_tls_raw not in {"0", "false", "no", "off"}
-
-    if not smtp_host or not smtp_username or not smtp_password or not from_email:
-        raise RuntimeError(
-            "Email verification is not configured yet. Add EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, "
-            "EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD, and EMAIL_FROM_EMAIL to Streamlit Secrets."
-        )
-
-    try:
-        smtp_port = int(smtp_port_raw)
-    except ValueError as exc:
-        raise RuntimeError("EMAIL_SMTP_PORT must be a valid number, such as 587.") from exc
-
-    message = EmailMessage()
-    message["Subject"] = "StudySphere email verification code"
-    message["From"] = f"{from_name} <{from_email}>"
-    message["To"] = recipient_email
-    message.set_content(
-        "Welcome to StudySphere.\n\n"
-        f"Your email verification code is: {verification_code}\n\n"
-        f"This code expires in {EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes. "
-        "For your security, do not share this code with anyone.\n\n"
-        "StudySphere — Learn smarter. Plan better. Achieve more."
-    )
-
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
-        if use_tls:
-            smtp.starttls()
-        smtp.login(smtp_username, smtp_password)
-        smtp.send_message(message)
-
-
-def cleanup_email_verifications():
-    cutoff = datetime.now().isoformat(timespec="seconds")
-    try:
-        cursor.execute(
-            "DELETE FROM email_verifications WHERE used = 1 OR expires_at < ?",
-            (cutoff,),
-        )
-        conn.commit()
-    except Exception:
-        pass
-
-
-def send_email_verification_code(email):
-    email = clean_email(email)
-    if not valid_email(email):
-        raise ValueError("Enter a valid email address before requesting a verification code.")
-
-    if not email_verification_configured():
-        raise RuntimeError(
-            "Email verification is not configured on this deployment. "
-            "Please configure the SMTP settings in Streamlit Secrets first."
-        )
-
-    existing = cursor.execute(
-        "SELECT auth_id, password_hash, role, account_status FROM users WHERE lower(email) = ?",
-        (email,),
-    ).fetchone()
-    if existing and existing[1]:
-        raise ValueError("An account with this email already exists. Please sign in instead.")
-
-    if existing and str(existing[3] or "active").lower() != "active":
-        raise ValueError("This email is associated with a disabled StudySphere account.")
-
-    cleanup_email_verifications()
-    recent = cursor.execute(
-        "SELECT created_at FROM email_verifications WHERE lower(email) = ? AND used = 0 ORDER BY created_at DESC LIMIT 1",
-        (email,),
-    ).fetchone()
-    if recent and st.session_state.get("signup_email_verification_sent_at", 0.0):
-        elapsed = time.time() - float(st.session_state.signup_email_verification_sent_at)
-        if elapsed < EMAIL_VERIFICATION_RESEND_SECONDS:
-            remaining = max(1, EMAIL_VERIFICATION_RESEND_SECONDS - int(elapsed))
-            raise ValueError(f"Please wait {remaining} seconds before requesting another code.")
-
-    verification_id = f"emailv-{uuid.uuid4().hex}"
-    verification_code = f"{secrets.randbelow(1000000):06d}"
-    code_salt, code_hash = hash_secret(verification_code)
-    now = datetime.now()
-    created_at = now.isoformat(timespec="seconds")
-    expires_at = (now + timedelta(minutes=EMAIL_VERIFICATION_EXPIRY_MINUTES)).isoformat(timespec="seconds")
-
-    try:
-        cursor.execute(
-            "INSERT INTO email_verifications (id, email, code_hash, code_salt, created_at, expires_at, attempts, used) "
-            "VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
-            (verification_id, email, code_hash, code_salt, created_at, expires_at),
-        )
-        conn.commit()
-        try:
-            send_studysphere_verification_email(email, verification_code)
-        except Exception:
-            cursor.execute("DELETE FROM email_verifications WHERE id = ?", (verification_id,))
-            conn.commit()
-            raise
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-
-    st.session_state.signup_email_verification_id = verification_id
-    st.session_state.signup_email_verified = ""
-    st.session_state.signup_email_verification_sent_at = time.time()
-    return verification_id
-
-
-def verify_signup_email_code(email, verification_code):
-    email = clean_email(email)
-    verification_code = str(verification_code or "").strip()
-    verification_id = str(st.session_state.get("signup_email_verification_id") or "")
-    if not verification_id:
-        return False, "Request a verification code first."
-
-    record = cursor.execute(
-        "SELECT id, email, code_hash, code_salt, expires_at, attempts, used FROM email_verifications "
-        "WHERE id = ? AND lower(email) = ?",
-        (verification_id, email),
-    ).fetchone()
-    if not record:
-        return False, "This verification request is no longer available. Request a new code."
-
-    if int(record[6] or 0) == 1:
-        return False, "This verification code has already been used."
-
-    try:
-        expires_at = datetime.fromisoformat(str(record[4]))
-    except Exception:
-        expires_at = datetime.now()
-
-    if datetime.now() > expires_at:
-        cursor.execute("UPDATE email_verifications SET used = 1 WHERE id = ?", (verification_id,))
-        conn.commit()
-        return False, "This verification code has expired. Request a new code."
-
-    attempts = int(record[5] or 0)
-    if attempts >= EMAIL_VERIFICATION_MAX_ATTEMPTS:
-        cursor.execute("UPDATE email_verifications SET used = 1 WHERE id = ?", (verification_id,))
-        conn.commit()
-        return False, "Too many incorrect attempts. Request a new verification code."
-
-    if not verification_code.isdigit() or len(verification_code) != 6:
-        cursor.execute("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?", (verification_id,))
-        conn.commit()
-        return False, "Enter the 6-digit verification code from your email."
-
-    if not verify_secret(verification_code, record[3], record[2]):
-        cursor.execute("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?", (verification_id,))
-        conn.commit()
-        remaining = EMAIL_VERIFICATION_MAX_ATTEMPTS - attempts - 1
-        return False, f"Incorrect verification code. {max(0, remaining)} attempts remaining."
-
-    now = datetime.now().isoformat(timespec="seconds")
-    cursor.execute(
-        "UPDATE email_verifications SET verified_at = ?, used = 1 WHERE id = ?",
-        (now, verification_id),
-    )
-    conn.commit()
-    st.session_state.signup_email_verified = email
-    return True, "Email verified successfully."
-
-
-def clear_signup_email_verification():
-    verification_id = str(st.session_state.get("signup_email_verification_id") or "")
-    if verification_id:
-        try:
-            cursor.execute("UPDATE email_verifications SET used = 1 WHERE id = ? AND used = 0", (verification_id,))
-            conn.commit()
-        except Exception:
-            pass
-    st.session_state.signup_email_verification_id = ""
-    st.session_state.signup_email_verified = ""
-    st.session_state.signup_email_verification_sent_at = 0.0
 
 
 def set_authenticated_user(auth_id, name, email, auth_method="local"):
@@ -6078,8 +5809,6 @@ def clear_authenticated_user():
     st.session_state.ai_messages = []
     st.session_state.active_chat_id = None
     st.session_state.page = 1
-    clear_signup_email_verification()
-    st.session_state.pop("signup_email_verification_email", None)
     st.session_state.pop("signup_verification_code", None)
 
 
@@ -6239,126 +5968,61 @@ def render_auth_screen():
     elif tab == "Create account":
         st.markdown("### Create your account")
         name = st.text_input("Full name", key="signup_name")
-        email = clean_email(st.text_input("Email address", key="signup_email"))
+        email = st.text_input("Email address", key="signup_email")
+        password = st.text_input("Password", type="password", key="signup_password")
+        confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
+        create_account = st.button("✨ Create account", use_container_width=True)
 
-        pending_email = str(st.session_state.get("signup_email_verification_email") or "")
-        if pending_email and pending_email != email:
-            clear_signup_email_verification()
-            st.session_state.pop("signup_email_verification_email", None)
-
-        email_verified = st.session_state.get("signup_email_verified") == email and bool(email)
-        verification_id = str(st.session_state.get("signup_email_verification_id") or "")
-
-        if not email_verified:
-            st.caption("Verify your email address before creating the account.")
-
-            if not verification_id:
-                send_code = st.button("📧 Send verification code", use_container_width=True)
-                if send_code:
-                    try:
-                        send_email_verification_code(email)
-                        st.session_state.signup_email_verification_email = email
-                        st.success(f"A 6-digit verification code was sent to {email}. Check your inbox and spam folder.")
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    except Exception:
-                        st.error("We could not send the verification email. Check the email settings and try again.")
-
+        if create_account:
+            name = clean_name(name)
+            email = clean_email(email)
+            if not name or not email or not password or not confirm:
+                st.error("Please complete all fields.")
+            elif not valid_email(email):
+                st.error("Enter a valid email address.")
+            elif len(password) < 8:
+                st.error("Use a password with at least 8 characters.")
+            elif password != confirm:
+                st.error("Passwords do not match.")
             else:
-                st.info(f"Verification code sent to {email}. The code expires in {EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes.")
-                verification_code = st.text_input(
-                    "Email verification code",
-                    max_chars=6,
-                    placeholder="Enter 6 digits",
-                    key="signup_verification_code",
-                )
-                verify_clicked = st.button("✅ Verify email", use_container_width=True)
-
-                if verify_clicked:
-                    ok, message = verify_signup_email_code(email, verification_code)
-                    if ok:
-                        st.success(message)
-                        st.rerun()
-                    else:
-                        st.error(message)
-
-                resend_disabled = (
-                    time.time() - float(st.session_state.get("signup_email_verification_sent_at", 0.0))
-                    < EMAIL_VERIFICATION_RESEND_SECONDS
-                )
-                resend_label = "⏳ Resend verification code" if resend_disabled else "🔄 Resend verification code"
-                resend_code = st.button(resend_label, use_container_width=True, disabled=resend_disabled)
-                if resend_code:
-                    try:
-                        clear_signup_email_verification()
-                        send_email_verification_code(email)
-                        st.session_state.signup_email_verification_email = email
-                        st.success("A new verification code was sent.")
-                        st.rerun()
-                    except Exception:
-                        st.error("We could not send a new verification email. Please try again later.")
-
-        if email_verified:
-            st.success("✅ Email verified")
-            st.caption("Finish setting up your StudySphere account.")
-            password = st.text_input("Password", type="password", key="signup_password")
-            confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
-            create_account = st.button("✨ Create account", use_container_width=True)
-
-            if create_account:
-                name = clean_name(name)
-                email = clean_email(email)
-                if not name or not email or not password or not confirm:
-                    st.error("Please complete all fields.")
-                elif not valid_email(email):
-                    st.error("Enter a valid email address.")
-                elif st.session_state.get("signup_email_verified") != email:
-                    st.error("Please verify your email address first.")
-                elif len(password) < 8:
-                    st.error("Use a password with at least 8 characters.")
-                elif password != confirm:
-                    st.error("Passwords do not match.")
+                existing = cursor.execute(
+                    "SELECT auth_id, name, password_hash FROM users WHERE lower(email) = ?",
+                    (email,),
+                ).fetchone()
+                if existing and existing[2]:
+                    st.error("An account with this email already exists. Please sign in instead.")
                 else:
-                    existing = cursor.execute(
-                        "SELECT auth_id, name, password_hash FROM users WHERE lower(email) = ?",
-                        (email,),
-                    ).fetchone()
-                    if existing and existing[2]:
-                        st.error("An account with this email already exists. Please sign in instead.")
-                    else:
-                        auth_id = existing[0] if existing else f"local-{uuid.uuid4().hex}"
-                        now = datetime.now().isoformat(timespec="seconds")
-                        password_salt, password_hash = hash_secret(password)
-                        recovery_code = generate_recovery_code()
-                        recovery_salt, recovery_hash = hash_secret(recovery_code)
-                        try:
-                            if existing:
-                                cursor.execute(
-                                    "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ?, auth_provider = CASE WHEN oidc_subject IS NOT NULL THEN 'local+oidc' ELSE 'local' END, account_status = 'active' WHERE auth_id = ?",
-                                    (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, auth_id),
-                                )
-                            else:
-                                cursor.execute(
-                                    "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, auth_provider, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                    (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID, "local", "active"),
-                                )
-                            conn.commit()
-                            write_audit_log("account_created", auth_id, "student", auth_id, "New local StudySphere account created after email verification")
-                            migrate_legacy_rows_to_first_local_account(auth_id)
-                            st.session_state.signup_recovery_code = recovery_code
-                            clear_signup_email_verification()
-                            st.session_state.pop("signup_email_verification_email", None)
-                            st.session_state.pop("signup_verification_code", None)
-                            set_authenticated_user(auth_id, name, email)
-                            st.success("Account created successfully.")
-                            st.info("Save your recovery code somewhere safe. You will need it if you forget your password.")
-                            st.code(recovery_code)
-                            st.rerun()
-                        except sqlite3.IntegrityError:
-                            st.error("That email is already registered. Try signing in instead.")
-                        except Exception as exc:
-                            st.error(f"Account creation failed: {str(exc)}")
+                    auth_id = existing[0] if existing else f"local-{uuid.uuid4().hex}"
+                    now = datetime.now().isoformat(timespec="seconds")
+                    password_salt, password_hash = hash_secret(password)
+                    recovery_code = generate_recovery_code()
+                    recovery_salt, recovery_hash = hash_secret(recovery_code)
+                    try:
+                        if existing:
+                            cursor.execute(
+                                "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ?, auth_provider = CASE WHEN oidc_subject IS NOT NULL THEN 'local+oidc' ELSE 'local' END, account_status = 'active' WHERE auth_id = ?",
+                                (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now if 'now' in locals() else datetime.now().isoformat(timespec="seconds"), auth_id),
+                            )
+                        else:
+                            now = datetime.now().isoformat(timespec="seconds")
+                            cursor.execute(
+                                "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, auth_provider, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID, "local", "active"),
+                            )
+                        conn.commit()
+                        write_audit_log("account_created", auth_id, "student", auth_id, "New local StudySphere account created")
+                        migrate_legacy_rows_to_first_local_account(auth_id)
+                        st.session_state.signup_recovery_code = recovery_code
+                        set_authenticated_user(auth_id, name, email)
+                        st.success("Account created successfully.")
+                        st.info("Save your recovery code somewhere safe. You will need it if you forget your password.")
+                        st.code(recovery_code)
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("That email is already registered. Try signing in instead.")
+                    except Exception as exc:
+                        st.error(f"Account creation failed: {str(exc)}")
+
     else:
         st.markdown("### Reset your password")
         st.caption("No email service is required. Use the recovery code shown when your account was created.")
