@@ -51,6 +51,10 @@ except Exception:
     xml_escape = None
 
 import streamlit as st
+try:
+    from streamlit.components.v1 import html as st_html
+except Exception:
+    st_html = None
 
 try:
     from pptx import Presentation
@@ -154,6 +158,25 @@ if "step11_package" not in st.session_state:
 
 if "image_compressor_results" not in st.session_state:
     st.session_state.image_compressor_results = []
+
+if "focus_started_at" not in st.session_state:
+    st.session_state.focus_started_at = None
+if "focus_duration_minutes" not in st.session_state:
+    st.session_state.focus_duration_minutes = 25
+if "focus_task_id" not in st.session_state:
+    st.session_state.focus_task_id = None
+if "focus_stop_pending" not in st.session_state:
+    st.session_state.focus_stop_pending = False
+if "focus_sessions" not in st.session_state:
+    st.session_state.focus_sessions = []
+if "flashcard_deck" not in st.session_state:
+    st.session_state.flashcard_deck = []
+if "flashcard_index" not in st.session_state:
+    st.session_state.flashcard_index = 0
+if "quiz_score" not in st.session_state:
+    st.session_state.quiz_score = 0
+if "quiz_answered" not in st.session_state:
+    st.session_state.quiz_answered = 0
 
 # ============================================================
 # DATABASE / PRODUCTION FOUNDATION
@@ -6368,6 +6391,62 @@ conn.commit()
 ensure_active_chat(AUTH_ID)
 
 # ============================================================
+# STUDENT PRODUCTIVITY HELPERS
+# ============================================================
+
+def _student_grade_points(grade):
+    return {
+        "A+": 4.0, "A": 4.0, "A-": 3.7,
+        "B+": 3.3, "B": 3.0, "B-": 2.7,
+        "C+": 2.3, "C": 2.0, "C-": 1.7,
+        "D+": 1.3, "D": 1.0, "F": 0.0,
+    }.get(str(grade or "").strip().upper(), 0.0)
+
+
+def _student_parse_date(value):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _student_make_cloze_cards(text_value, limit=20):
+    """Create simple, offline cloze cards from stored study text.
+
+    This intentionally does not call Gemini, so flashcard generation remains
+    available even when the student's AI quota is exhausted.
+    """
+    raw = re.sub(r"\s+", " ", str(text_value or "")).strip()
+    if len(raw) < 60:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", raw)
+    cards = []
+    seen = set()
+    stop_words = {
+        "about", "after", "again", "being", "between", "could", "their", "there", "these",
+        "those", "which", "while", "where", "what", "when", "with", "from", "that", "this",
+        "have", "will", "into", "than", "then", "them", "they", "your", "you", "also", "more",
+        "using", "used", "such", "some", "only", "very", "each", "over", "under", "within",
+    }
+    for sentence in sentences:
+        clean = sentence.strip(" -•")
+        words = re.findall(r"[A-Za-z][A-Za-z0-9-]{4,}", clean)
+        ranked = [w for w in words if w.casefold() not in stop_words]
+        if not clean or len(ranked) < 2:
+            continue
+        answer = max(ranked, key=lambda w: (len(w), len(set(w.casefold()))))
+        key = clean.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        question = re.sub(rf"\b{re.escape(answer)}\b", "_____", clean, count=1, flags=re.IGNORECASE)
+        cards.append({"question": question, "answer": answer, "source": clean})
+        if len(cards) >= limit:
+            break
+    return cards
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -6423,6 +6502,10 @@ nav_options = [
 if st.session_state.user_role == "student":
     nav_options.append((20, "📊  My Attendance"))
     nav_options.append((21, "💳  My Fees"))
+    nav_options.append((24, "🧠  Exam Preparation"))
+    nav_options.append((25, "📈  Grades & GPA"))
+    nav_options.append((26, "🗂️  Flashcards & Quiz"))
+    nav_options.append((27, "🎯  Focus Mode"))
 if has_permission("manage_university"):
     nav_options.append((22, "💰  Student Fees"))
     nav_options.append((17, "🔗  Integration Center"))
@@ -6466,6 +6549,10 @@ if st.session_state.page == 20 and st.session_state.user_role != "student":
 if st.session_state.page == 21 and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
+for _student_only_page in (24, 25, 26, 27):
+    if st.session_state.page == _student_only_page and st.session_state.user_role != "student":
+        st.session_state.page = 1
+        st.rerun()
 if st.session_state.page == 22 and not has_permission("manage_university"):
     st.session_state.page = 1
     st.rerun()
@@ -6693,6 +6780,56 @@ if st.session_state.page == 1:
 
     st.markdown(f'<div class="progress-card"><div class="panel-title">📈 Study progress</div><div class="panel-sub">Your current task completion pace.</div><div style="height:15px"></div><div class="progress-layout"><div class="progress-ring" style="--progress:{task_progress};"><div class="progress-ring-text">{task_progress}%</div></div><div><div class="progress-heading">{completed_tasks} of {total_tasks} tasks complete</div><div class="progress-copy">Keep your next study action small and clear. Every completed session moves your academic workspace forward.</div><div class="mini-bar"><div class="mini-fill" style="width:{task_progress}%;"></div></div></div></div></div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # Smart command center: transparent, data-driven recommendations from the
+    # student's existing records. No extra AI request is needed.
+    overdue_assignments = int(cursor.execute(
+        "SELECT COUNT(*) FROM assignments WHERE user_id = ? AND deadline < ? AND status <> 'Completed'",
+        (AUTH_ID, today_iso),
+    ).fetchone()[0] or 0)
+    today_tasks = int(cursor.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND task_date = ? AND completed = 0",
+        (AUTH_ID, today_iso),
+    ).fetchone()[0] or 0)
+    nearest_exam_days = None
+    if upcoming_exams:
+        nearest_exam_date = _student_parse_date(upcoming_exams[0][1])
+        if nearest_exam_date:
+            nearest_exam_days = max(0, (nearest_exam_date - app_now.date()).days)
+
+    insight_cards = []
+    if overdue_assignments:
+        insight_cards.append(("🔴", "Clear overdue work", f"{overdue_assignments} assignment(s) are past their deadline.", 3))
+    elif today_tasks:
+        insight_cards.append(("🟡", "Finish today’s queue", f"{today_tasks} open study task(s) are scheduled for today.", 5))
+    else:
+        insight_cards.append(("🟢", "You are on track", "No overdue assignments or unfinished tasks scheduled for today.", 1))
+    if nearest_exam_days is not None:
+        insight_cards.append(("🎯", "Prepare for your nearest exam", f"Your next exam is in {nearest_exam_days} day(s). Open Exam Preparation for a focused plan.", 4))
+    else:
+        insight_cards.append(("📅", "Plan your next study cycle", "Add an exam or study task to get a more precise daily recommendation.", 2))
+    insight_cards.append(("📈", "Check your academic picture", "Use Grades & GPA to calculate semester GPA and projected cumulative GPA.", 2))
+
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Smart study command center</div><div class="section-sub">Simple recommendations based on the academic records already stored in StudySphere.</div></div></div><div class="dashboard-grid-3">', unsafe_allow_html=True)
+    for icon_value, title_value, copy_value, _weight in insight_cards[:3]:
+        st.markdown(
+            f'<div class="focus-card" style="min-height:150px;"><div style="font-size:26px;">{icon_value}</div><div class="panel-title" style="margin-top:8px;">{title_value}</div><div class="panel-sub" style="margin-top:6px;line-height:1.6;">{copy_value}</div></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+    smart_a, smart_b, smart_c = st.columns(3)
+    smart_exam = smart_a.button("🧠 Open Exam Preparation", key="dashboard_exam_prep", use_container_width=True)
+    smart_gpa = smart_b.button("📈 Calculate GPA", key="dashboard_gpa", use_container_width=True)
+    smart_focus = smart_c.button("🎯 Start Focus Mode", key="dashboard_focus", use_container_width=True)
+    if smart_exam:
+        st.session_state.page = 24
+        st.rerun()
+    if smart_gpa:
+        st.session_state.page = 25
+        st.rerun()
+    if smart_focus:
+        st.session_state.page = 27
+        st.rerun()
 
     st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Deadline radar</div><div class="section-sub">Your nearest saved assignments and exams.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
 
@@ -9251,6 +9388,281 @@ elif st.session_state.page == 10:
             st.rerun()
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Document tools</div><div class="ai-title">Clean conversion for study material</div><div class="ai-text">For PDF and DOCX files, StudySphere extracts readable text and rebuilds it in the format you choose. Original complex page layouts, embedded images, and advanced Word/PDF styling are not preserved in this lightweight converter.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 24:
+    st.markdown('<div class="page-banner"><div class="page-title">🧠 Exam Preparation</div><div class="page-sub">Turn an upcoming exam into a focused preparation plan using your existing StudySphere records.</div></div>', unsafe_allow_html=True)
+
+    exam_rows = cursor.execute(
+        "SELECT exams.id, exams.title, exams.exam_date, exams.syllabus, exams.notes, exams.subject_id, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exams.exam_date >= ? ORDER BY exams.exam_date",
+        (AUTH_ID, today_iso if 'today_iso' in globals() else date.today().isoformat()),
+    ).fetchall()
+    if not exam_rows:
+        st.markdown('<div class="panel"><div class="panel-title">📅 No upcoming exams yet</div><div class="panel-sub">Add an exam from the Exams page and StudySphere will turn it into a preparation workspace.</div></div>', unsafe_allow_html=True)
+        if st.button("📅 Add an exam", key="exam_prep_add_exam", use_container_width=True):
+            st.session_state.page = 4
+            st.rerun()
+    else:
+        exam_labels = [f"{row[1]} • {row[6] or 'General'} • {row[2]}" for row in exam_rows]
+        selected_exam_label = st.selectbox("Choose an exam", exam_labels, key="exam_prep_selector")
+        selected_exam = exam_rows[exam_labels.index(selected_exam_label)]
+        exam_date_value = _student_parse_date(selected_exam[2]) or date.today()
+        days_left = max(0, (exam_date_value - date.today()).days)
+        subject_id = selected_exam[5]
+
+        prep_tasks = cursor.execute(
+            "SELECT id, title, task_date, duration, priority, completed FROM tasks WHERE user_id = ? AND subject_id = ? AND task_date <= ? ORDER BY task_date",
+            (AUTH_ID, subject_id, selected_exam[2]),
+        ).fetchall() if subject_id is not None else []
+        completed_prep = sum(1 for row in prep_tasks if int(row[5] or 0) == 1)
+        prep_pct = int((completed_prep / len(prep_tasks)) * 100) if prep_tasks else 0
+        syllabus_text = str(selected_exam[3] or "").strip()
+        syllabus_points = [x.strip(" •-\t") for x in re.split(r"\n+|;", syllabus_text) if x.strip()]
+        plan_days = max(1, min(days_left if days_left > 0 else 1, 7))
+
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Days left", days_left)
+        p2.metric("Preparation tasks", len(prep_tasks))
+        p3.metric("Tasks completed", completed_prep)
+        p4.metric("Prep progress", f"{prep_pct}%")
+
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">Exam command center</div><div class="ai-title">🎯 {selected_exam[1]}</div><div class="ai-text">{selected_exam[6] or "General"} • {selected_exam[2]} • {"Today is the final review day." if days_left == 0 else f"You have {days_left} day(s) to prepare."}</div></div>', unsafe_allow_html=True)
+
+        left, right = st.columns(2)
+        with left:
+            st.markdown('<div class="panel"><div class="panel-title">📚 Syllabus</div><div class="panel-sub">Topics saved with this exam.</div></div>', unsafe_allow_html=True)
+            if syllabus_points:
+                for idx, point in enumerate(syllabus_points, start=1):
+                    st.markdown(f"**{idx}.** {point}")
+            else:
+                st.info("No syllabus has been saved for this exam yet.")
+            if selected_exam[4]:
+                st.markdown('<div class="panel" style="margin-top:14px;"><div class="panel-title">📝 Exam notes</div></div>', unsafe_allow_html=True)
+                st.write(selected_exam[4])
+        with right:
+            st.markdown('<div class="panel"><div class="panel-title">🗓 Suggested preparation rhythm</div><div class="panel-sub">A lightweight plan derived from the exam date—not an AI-generated guess.</div></div>', unsafe_allow_html=True)
+            labels = ["Understand core concepts", "Practice questions", "Review weak areas", "Final revision"]
+            for idx in range(plan_days):
+                label = labels[idx % len(labels)]
+                day_offset = plan_days - idx - 1
+                target_day = date.today() if day_offset == 0 else date.fromordinal(date.today().toordinal() + min(day_offset, days_left))
+                st.markdown(f'<div class="focus-row"><div class="focus-icon">{idx + 1}</div><div class="focus-main"><div class="focus-name">{label}</div><div class="focus-detail">{target_day.strftime("%d %b")} • 45–60 min</div></div></div>', unsafe_allow_html=True)
+
+        task_title_value = f"Exam Prep: {selected_exam[1]}"
+        duplicate_task = cursor.execute(
+            "SELECT 1 FROM tasks WHERE user_id = ? AND title = ? AND task_date = ? LIMIT 1",
+            (AUTH_ID, task_title_value, date.today().isoformat()),
+        ).fetchone()
+        b1, b2 = st.columns(2)
+        with b1:
+            create_exam_task = st.button("➕ Create today’s exam-prep task", key="exam_prep_create_task", use_container_width=True, disabled=bool(duplicate_task))
+        with b2:
+            open_exam_agent = st.button("🤖 Ask AI Agent for a deeper plan", key="exam_prep_open_agent", use_container_width=True)
+        if create_exam_task:
+            cursor.execute(
+                "INSERT INTO tasks (title, task_date, duration, priority, completed, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_title_value, date.today().isoformat(), 60, "High", 0, subject_id, AUTH_ID),
+            )
+            conn.commit()
+            st.success("Today's exam-prep task was added to your Study Planner.")
+            st.rerun()
+        if open_exam_agent:
+            st.session_state.page = 8
+            st.rerun()
+
+elif st.session_state.page == 25:
+    st.markdown('<div class="page-banner"><div class="page-title">📈 Grades & GPA</div><div class="page-sub">Calculate semester GPA, project your cumulative GPA, and work out what average you need for a target.</div></div>', unsafe_allow_html=True)
+
+    grade_points = {"A+": 4.0, "A": 4.0, "A-": 3.7, "B+": 3.3, "B": 3.0, "B-": 2.7, "C+": 2.3, "C": 2.0, "C-": 1.7, "D+": 1.3, "D": 1.0, "F": 0.0}
+    st.markdown('<div class="panel"><div class="panel-title">🎓 Semester calculator</div><div class="panel-sub">Enter the courses you are taking this semester. Blank course rows are ignored.</div></div>', unsafe_allow_html=True)
+    current_rows = []
+    for idx in range(6):
+        c1, c2, c3 = st.columns([2.5, 1, 1])
+        course_name_value = c1.text_input("Course", key=f"gpa_course_{idx}")
+        credits_value = c2.number_input("Credits", min_value=0.0, max_value=10.0, value=0.0, step=0.5, key=f"gpa_credits_{idx}")
+        grade_value = c3.selectbox("Grade", list(grade_points.keys()), index=1, key=f"gpa_grade_{idx}")
+        if course_name_value.strip() and credits_value > 0:
+            current_rows.append((course_name_value.strip(), float(credits_value), grade_value))
+
+    semester_credits = sum(row[1] for row in current_rows)
+    semester_quality_points = sum(row[1] * grade_points[row[2]] for row in current_rows)
+    semester_gpa = semester_quality_points / semester_credits if semester_credits else 0.0
+
+    a, b, c = st.columns(3)
+    current_cgpa = a.number_input("Current cumulative GPA", min_value=0.0, max_value=4.0, value=0.0, step=0.01, key="gpa_current_cgpa")
+    completed_credits = b.number_input("Completed credit hours", min_value=0.0, max_value=300.0, value=0.0, step=1.0, key="gpa_completed_credits")
+    target_cgpa = c.number_input("Target cumulative GPA", min_value=0.0, max_value=4.0, value=3.5, step=0.01, key="gpa_target_cgpa")
+
+    g1, g2, g3 = st.columns(3)
+    g1.metric("Semester GPA", f"{semester_gpa:.2f}")
+    g2.metric("Semester credits", f"{semester_credits:.1f}")
+    if completed_credits + semester_credits > 0:
+        projected = ((current_cgpa * completed_credits) + semester_quality_points) / (completed_credits + semester_credits)
+    else:
+        projected = semester_gpa
+    g3.metric("Projected cumulative GPA", f"{projected:.2f}")
+
+    if completed_credits > 0 and semester_credits > 0:
+        required_semester = ((target_cgpa * (completed_credits + semester_credits)) - (current_cgpa * completed_credits)) / semester_credits
+        if required_semester <= 4.0:
+            st.info(f"To finish at {target_cgpa:.2f} cumulative GPA after this semester, the math requires about {max(0.0, required_semester):.2f} semester GPA.")
+        else:
+            st.warning(f"A {target_cgpa:.2f} cumulative GPA would require about {required_semester:.2f} this semester, which is above the 4.0 scale.")
+    elif not current_rows:
+        st.caption("Add at least one course with credits to calculate your semester GPA.")
+
+    if current_rows:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">Course breakdown</div></div>', unsafe_allow_html=True)
+        st.dataframe(
+            [{"Course": name, "Credits": credits, "Grade": grade, "Grade points": grade_points[grade], "Quality points": round(credits * grade_points[grade], 2)} for name, credits, grade in current_rows],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+elif st.session_state.page == 26:
+    st.markdown('<div class="page-banner"><div class="page-title">🗂️ Flashcards & Quiz</div><div class="page-sub">Turn your saved notes into offline cloze-style cards and test yourself without spending Gemini quota.</div></div>', unsafe_allow_html=True)
+
+    documents = cursor.execute("SELECT id, name, file_type FROM documents WHERE user_id = ? ORDER BY uploaded_at DESC", (AUTH_ID,)).fetchall()
+    source_mode = st.radio("Card source", ["My uploaded document", "Paste my own notes"], horizontal=True, key="flashcard_source_mode")
+    source_text = ""
+    if source_mode == "My uploaded document":
+        if not documents:
+            st.info("Upload a PDF, DOCX, TXT, or Markdown note from the Documents page first.")
+            if st.button("📄 Open Documents", key="flashcards_open_documents", use_container_width=True):
+                st.session_state.page = 6
+                st.rerun()
+        else:
+            labels = [f"{row[1]} • {row[2].upper()}" for row in documents]
+            selected_label = st.selectbox("Choose a document", labels, key="flashcard_document_selector")
+            selected_doc = documents[labels.index(selected_label)]
+            chunks = cursor.execute("SELECT content FROM document_chunks WHERE document_id = ? AND user_id = ? ORDER BY chunk_index LIMIT 16", (selected_doc[0], AUTH_ID)).fetchall()
+            source_text = " ".join(str(row[0] or "") for row in chunks)
+            st.caption(f"Using {selected_doc[1]} • {len(source_text):,} characters of stored study text")
+    else:
+        source_text = st.text_area("Paste notes", height=220, placeholder="Paste a lesson, definition list, lecture summary, or revision notes here…", key="flashcard_manual_notes")
+
+    cards_to_make = st.slider("Number of cards", min_value=4, max_value=20, value=10, step=1, key="flashcard_count")
+    if st.button("✨ Build flashcards", key="build_flashcards_button", use_container_width=True):
+        deck = _student_make_cloze_cards(source_text, cards_to_make)
+        st.session_state.flashcard_deck = deck
+        st.session_state.flashcard_index = 0
+        st.session_state.quiz_score = 0
+        st.session_state.quiz_answered = 0
+        if not deck:
+            st.warning("Not enough clear sentences were found. Try a longer set of notes.")
+        else:
+            st.success(f"Built {len(deck)} flashcards locally.")
+            st.rerun()
+
+    deck = st.session_state.get("flashcard_deck", [])
+    if deck:
+        st.markdown('<div class="ai-panel"><div class="ai-badge">Offline study mode</div><div class="ai-title">🧠 Your personal card deck</div><div class="ai-text">Cards are created from the exact text you supplied or uploaded. Gemini is not called, so this mode keeps working when the AI quota is unavailable.</div></div>', unsafe_allow_html=True)
+        idx = min(st.session_state.flashcard_index, len(deck) - 1)
+        card = deck[idx]
+        st.markdown(f'<div class="panel" style="text-align:center;padding:28px;min-height:190px;"><div class="section-kicker">Card {idx + 1} of {len(deck)}</div><div style="font-size:24px;font-weight:800;margin:18px 0;line-height:1.45;">{card["question"]}</div></div>', unsafe_allow_html=True)
+        show_answer = st.checkbox("Show answer", key=f"flashcard_show_{idx}")
+        if show_answer:
+            st.success(f"Answer: {card['answer']}")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("← Previous", key="flash_prev", use_container_width=True):
+            st.session_state.flashcard_index = (idx - 1) % len(deck)
+            st.rerun()
+        if c2.button("✓ I knew it", key="flash_knew", use_container_width=True):
+            st.session_state.flashcard_index = (idx + 1) % len(deck)
+            st.rerun()
+        if c3.button("→ Next", key="flash_next", use_container_width=True):
+            st.session_state.flashcard_index = (idx + 1) % len(deck)
+            st.rerun()
+
+        st.markdown('<div class="section-kicker" style="margin-top:24px;">Quick quiz</div>', unsafe_allow_html=True)
+        options = list(dict.fromkeys([str(item["answer"]) for item in deck]))
+        if len(options) >= 2:
+            current_quiz = deck[idx]
+            distractors = [x for x in options if x.casefold() != current_quiz["answer"].casefold()][:3]
+            quiz_options = [current_quiz["answer"]] + distractors
+            quiz_options = sorted(set(quiz_options), key=lambda value: value.casefold())
+            quiz_choice = st.radio("Complete the statement:", quiz_options, key=f"quiz_choice_{idx}")
+            if st.button("Check answer", key=f"quiz_check_{idx}", use_container_width=True):
+                st.session_state.quiz_answered += 1
+                if quiz_choice.casefold() == current_quiz["answer"].casefold():
+                    st.session_state.quiz_score += 1
+                    st.success("Correct — nice work.")
+                else:
+                    st.error(f"Not quite. The correct answer is {current_quiz['answer']}.")
+            st.caption(f"Quiz score: {st.session_state.quiz_score}/{st.session_state.quiz_answered or 0}")
+        else:
+            st.info("Build a few more cards to enable the multiple-choice quiz.")
+
+elif st.session_state.page == 27:
+    st.markdown('<div class="page-banner"><div class="page-title">🎯 Focus Mode</div><div class="page-sub">Work on one academic task at a time with a distraction-free session timer.</div></div>', unsafe_allow_html=True)
+
+    open_tasks = cursor.execute("SELECT tasks.id, tasks.title, tasks.duration, tasks.priority, subjects.name FROM tasks LEFT JOIN subjects ON tasks.subject_id = subjects.id WHERE tasks.user_id = ? AND tasks.completed = 0 ORDER BY CASE tasks.priority WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END, tasks.task_date LIMIT 30", (AUTH_ID,)).fetchall()
+    task_map = {f"#{row[0]} • {row[1]} • {row[4] or 'General'}": row for row in open_tasks}
+    if task_map:
+        selected_focus_label = st.selectbox("Focus task", list(task_map.keys()), key="focus_task_selector")
+        selected_focus = task_map[selected_focus_label]
+    else:
+        selected_focus = None
+        st.info("You have no open study tasks. Add one in Study Planner before starting Focus Mode.")
+
+    duration_options = [15, 25, 30, 45, 50, 60, 90]
+    focus_minutes = st.select_slider("Session length", options=duration_options, value=int(st.session_state.focus_duration_minutes or 25), key="focus_duration_selector")
+    st.session_state.focus_duration_minutes = focus_minutes
+
+    active_focus = st.session_state.get("focus_started_at")
+    if active_focus:
+        remaining = max(0, int(st.session_state.focus_duration_minutes * 60 - (time.time() - active_focus)))
+        task_title_focus = "Focus session"
+        if st.session_state.get("focus_task_id"):
+            row = cursor.execute("SELECT title FROM tasks WHERE id = ? AND user_id = ?", (st.session_state.focus_task_id, AUTH_ID)).fetchone()
+            task_title_focus = row[0] if row else task_title_focus
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">Focus session running</div><div class="ai-title">🎯 {task_title_focus}</div><div class="ai-text">Stay on one task until the timer reaches zero. You can stop early and choose whether to mark the task complete.</div></div>', unsafe_allow_html=True)
+        if st_html:
+            st_html(f"""<div style=\"font-family:Inter,Arial,sans-serif;text-align:center;padding:26px;background:#0B1F3A;border-radius:22px;color:#FFFFFF;box-shadow:0 20px 50px rgba(11,31,58,.20);\"><div style=\"font-size:12px;letter-spacing:1px;text-transform:uppercase;opacity:.78;\">Remaining</div><div id=\"timer\" style=\"font-size:72px;font-weight:900;letter-spacing:2px;margin:8px 0;\">--:--</div><div style=\"font-size:13px;color:#BAE6FD;\">Focus on: {task_title_focus.replace('<','&lt;').replace('>','&gt;')}</div></div><script>(function(){{const end=Date.now()+{remaining}*1000;const el=document.getElementById('timer');function tick(){{const r=Math.max(0,end-Date.now());const sec=Math.floor(r/1000);const m=String(Math.floor(sec/60)).padStart(2,'0');const s=String(sec%60).padStart(2,'0');el.textContent=m+':'+s;if(r<=0){{clearInterval(id);el.textContent='00:00';}}}}tick();const id=setInterval(tick,1000);}})();</script>""", height=190)
+        else:
+            st.metric("Minutes remaining", f"{remaining // 60:02d}:{remaining % 60:02d}")
+        stop_focus = st.button("⏹ Stop focus session", key="stop_focus_session", use_container_width=True)
+        if stop_focus:
+            st.session_state.focus_stop_pending = True
+            st.rerun()
+        if st.session_state.get("focus_stop_pending"):
+            st.markdown('<div class="panel" style="margin-top:12px;"><div class="panel-title">Finish this session?</div><div class="panel-sub">Choose whether the focused task should also be marked complete.</div></div>', unsafe_allow_html=True)
+            mark_done = st.checkbox("Mark the focused task as completed", value=False, key="focus_mark_done")
+            stop_confirm, stop_cancel = st.columns(2)
+            if stop_confirm.button("✅ Save session", key="save_focus_session", use_container_width=True):
+                elapsed = max(1, int((time.time() - active_focus) / 60))
+                st.session_state.focus_sessions.append({"task_id": st.session_state.focus_task_id, "minutes": min(elapsed, st.session_state.focus_duration_minutes), "completed_at": datetime.now().isoformat(timespec="seconds")})
+                if mark_done and st.session_state.focus_task_id:
+                    cursor.execute("UPDATE tasks SET completed = 1 WHERE id = ? AND user_id = ?", (st.session_state.focus_task_id, AUTH_ID))
+                    conn.commit()
+                st.session_state.focus_started_at = None
+                st.session_state.focus_task_id = None
+                st.session_state.focus_stop_pending = False
+                st.success("Focus session saved.")
+                st.rerun()
+            if stop_cancel.button("Continue focusing", key="cancel_stop_focus", use_container_width=True):
+                st.session_state.focus_stop_pending = False
+                st.rerun()
+    else:
+        if selected_focus:
+            f1, f2, f3 = st.columns(3)
+            f1.metric("Task", selected_focus[1])
+            f2.metric("Suggested minutes", selected_focus[2] or focus_minutes)
+            f3.metric("Priority", selected_focus[3] or "Medium")
+        start_focus = st.button("▶ Start focus session", key="start_focus_session", use_container_width=True, disabled=not bool(selected_focus))
+        if start_focus and selected_focus:
+            st.session_state.focus_started_at = time.time()
+            st.session_state.focus_duration_minutes = focus_minutes
+            st.session_state.focus_task_id = selected_focus[0]
+            st.session_state.focus_stop_pending = False
+            st.rerun()
+
+    sessions = st.session_state.get("focus_sessions", [])
+    if sessions:
+        total_focus_minutes = sum(int(item.get("minutes") or 0) for item in sessions)
+        st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">📊 Focus history</div><div class="panel-sub">Current session history for this browser session.</div></div>', unsafe_allow_html=True)
+        st.metric("Total focused minutes", total_focus_minutes)
+        st.dataframe(sessions[::-1], use_container_width=True, hide_index=True)
 
 elif st.session_state.page == 23:
     st.markdown('<div class="page-banner"><div class="page-title">🖼️ Image Compressor</div><div class="page-sub">Reduce image file size for assignments, uploads, websites, and social posts — directly inside StudySphere.</div></div>', unsafe_allow_html=True)
