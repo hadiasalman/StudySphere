@@ -2665,23 +2665,23 @@ st.markdown(
 [data-testid="stSidebarCollapseButton"] button svg,
 [data-testid="stSidebarCollapseButton"] button svg path,
 [data-testid="stSidebarCollapsedControl"] button svg,
-[data-testid="stSidebarCollapsedControl"] button svg path {
+[data-testid="stSidebarCollapsedControl"] button svg path {{
   color:{control_accent} !important;
   fill:{control_accent} !important;
   stroke:{control_accent} !important;
-}
+}}
 [data-testid="stSidebarCollapseButton"] button,
-[data-testid="stSidebarCollapsedControl"] button {
+[data-testid="stSidebarCollapsedControl"] button {{
   color:{control_accent} !important;
-}
+}}
 [data-testid="stSidebarCollapseButton"] button:hover svg,
 [data-testid="stSidebarCollapseButton"] button:hover svg path,
 [data-testid="stSidebarCollapsedControl"] button:hover svg,
-[data-testid="stSidebarCollapsedControl"] button:hover svg path {
+[data-testid="stSidebarCollapsedControl"] button:hover svg path {{
   color:{control_accent_hover} !important;
   fill:{control_accent_hover} !important;
   stroke:{control_accent_hover} !important;
-}
+}}
 
 /* ===== StudySphere global dark-mode controls ===== */
 .stButton > button,
