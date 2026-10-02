@@ -15,6 +15,7 @@ import csv
 import sqlite3
 import uuid
 import zipfile
+from pathlib import Path
 from collections import Counter
 from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -64,6 +65,18 @@ except Exception:
     MSO_ANCHOR = None
     Inches = Pt = None
     RGBColor = None
+
+# Optional Google Drive/Slides integration. The app remains fully functional
+# without these packages; direct Google Slides export is enabled only when
+# the Creator configures valid Google service-account credentials.
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build as google_api_build
+    from googleapiclient.http import MediaIoBaseUpload
+except Exception:
+    service_account = None
+    google_api_build = None
+    MediaIoBaseUpload = None
 
 st.set_page_config(
     page_title="StudySphere",
@@ -715,6 +728,8 @@ def deployment_bundle_bytes(base_url=""):
         "reportlab>=4.2\n"
         "python-pptx>=1.0\n"
         "Pillow>=10.0\n"
+        "google-api-python-client>=2.170.0\n"
+        "google-auth>=2.40.0\n"
         "Authlib>=1.3.2\n"
         "psycopg[binary]>=3.2\n"
     ).encode("utf-8")
@@ -723,6 +738,9 @@ def deployment_bundle_bytes(base_url=""):
         "STUDYSPHERE_ENV=production\n"
         "# DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/studysphere\n"
         "# GEMINI_API_KEY=YOUR_GEMINI_API_KEY\n"
+        "# GOOGLE_SERVICE_ACCOUNT_JSON=YOUR_SERVICE_ACCOUNT_JSON\n"
+        "# GOOGLE_DRIVE_FOLDER_ID=OPTIONAL_SHARED_DRIVE_FOLDER_ID\n"
+        "# GOOGLE_SLIDES_SHARE_WITH_USER=false\n"
         "STUDYSPHERE_STORAGE_DIR=studysphere_data\n"
     ).encode("utf-8")
 
@@ -4980,6 +4998,122 @@ def build_pptx_bytes(deck, theme_name="Ocean"):
     return buffer.getvalue()
 
 
+def _google_slides_service_account_info():
+    """Read optional Google service-account JSON from Streamlit Secrets/env.
+
+    Supported configuration:
+      GOOGLE_SERVICE_ACCOUNT_JSON = "{...json...}"
+    or
+      GOOGLE_SERVICE_ACCOUNT_JSON = "path/to/service-account.json"
+
+    A shared Drive/folder can be used by additionally setting
+    GOOGLE_DRIVE_FOLDER_ID. The credentials must have access to that folder.
+    """
+    raw = ""
+    try:
+        raw = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    raw = str(raw or "").strip()
+    if not raw:
+        return None
+
+    if raw.startswith("{"):
+        try:
+            return json.loads(raw)
+        except Exception as exc:
+            raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON contains invalid JSON.") from exc
+
+    candidate = Path(raw) if 'Path' in globals() else None
+    if candidate and candidate.exists():
+        try:
+            return json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError("The Google service-account JSON file could not be read.") from exc
+
+    raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON must contain service-account JSON or a valid file path.")
+
+
+def export_pptx_to_google_slides(pptx_bytes, title, user_email=""):
+    """Convert a generated PowerPoint into a native Google Slides file.
+
+    This is optional. It requires Google service-account credentials configured
+    by the Creator and Google Drive API access. PowerPoint uploads can be
+    converted to Google Slides by Drive's import pipeline.
+    """
+    if service_account is None or google_api_build is None or MediaIoBaseUpload is None:
+        return None, "Google Slides export dependencies are not installed. Add google-api-python-client and google-auth to requirements.txt."
+
+    info = _google_slides_service_account_info()
+    if not info:
+        return None, "Direct Google Slides export is not configured. Creator: add GOOGLE_SERVICE_ACCOUNT_JSON to Streamlit Secrets and ensure the service account has access to the target Drive/folder."
+
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    drive = google_api_build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+    safe_title = str(title or "StudySphere Presentation").strip()[:180] or "StudySphere Presentation"
+    body = {
+        "name": safe_title,
+        "mimeType": "application/vnd.google-apps.presentation",
+    }
+
+    folder_id = ""
+    try:
+        folder_id = str(st.secrets.get("GOOGLE_DRIVE_FOLDER_ID", "") or "").strip()
+    except Exception:
+        folder_id = ""
+    if not folder_id:
+        folder_id = str(os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "") or "").strip()
+    if folder_id:
+        body["parents"] = [folder_id]
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(bytes(pptx_bytes or b"")),
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        resumable=False,
+    )
+    created = drive.files().create(
+        body=body,
+        media_body=media,
+        fields="id,name,mimeType,webViewLink",
+        supportsAllDrives=True,
+    ).execute()
+
+    file_id = str(created.get("id") or "").strip()
+    if not file_id:
+        return None, "Google Drive did not return a presentation ID."
+
+    # Optional per-student sharing. The Creator can enable this by setting
+    # GOOGLE_SLIDES_SHARE_WITH_USER=true. If sharing is rejected by Workspace
+    # policy, the file is still created and the owner link is returned.
+    share_enabled = False
+    try:
+        share_enabled = str(st.secrets.get("GOOGLE_SLIDES_SHARE_WITH_USER", "false")).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        share_enabled = str(os.environ.get("GOOGLE_SLIDES_SHARE_WITH_USER", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+    share_note = ""
+    target_email = str(user_email or "").strip()
+    if share_enabled and target_email and "@" in target_email:
+        try:
+            drive.permissions().create(
+                fileId=file_id,
+                body={"type": "user", "role": "writer", "emailAddress": target_email},
+                sendNotificationEmail=False,
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:
+            share_note = f" The presentation was created, but sharing with {target_email} was not permitted: {exc}"
+
+    link = str(created.get("webViewLink") or "").strip()
+    if not link:
+        link = f"https://docs.google.com/presentation/d/{file_id}/edit"
+    return {"id": file_id, "url": link, "name": safe_title, "share_note": share_note}, ""
+
+
 def _presentation_json_from_text(raw_text):
     cleaned = str(raw_text or "").strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
@@ -5609,7 +5743,7 @@ def convert_document_format(file_bytes, file_name, output_format, title):
         output_bytes = _document_to_pdf_bytes(text_value, title)
         extension = "pdf"
         mime = "application/pdf"
-    elif output_format == "DOCX":
+    elif output_format in {"DOCX", "Word (.docx)"}:
         output_bytes = _document_to_docx_bytes(text_value, title)
         extension = "docx"
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -6824,9 +6958,9 @@ elif st.session_state.page == 8:
 
 
 elif st.session_state.page == 9:
-    st.markdown('<div class="page-banner"><div class="page-title">📊 Presentation Studio</div><div class="page-sub">Turn a single prompt into a complete, downloadable PowerPoint deck.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-banner"><div class="page-title">📊 Presentation Studio</div><div class="page-sub">Turn a single prompt into a complete presentation and choose PowerPoint or Google Slides as the output.</div></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="panel"><div class="panel-title">Create your presentation</div><div class="panel-sub">Describe the topic, audience, and result you want. StudySphere will build the slide structure, write concise content, and generate a real .pptx file.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><div class="panel-title">Create your presentation</div><div class="panel-sub">Describe the topic, audience, and result you want. StudySphere builds the slide structure and generates the presentation. Choose PowerPoint for a downloadable .pptx or Google Slides when Drive integration is configured.</div></div>', unsafe_allow_html=True)
 
     presentation_prompt = st.text_area(
         "Presentation prompt",
@@ -6841,11 +6975,17 @@ elif st.session_state.page == 9:
     presentation_audience = c2.selectbox("Audience", ["University students", "School/college students", "Teachers", "Professional audience", "General audience"])
     presentation_tone = c3.selectbox("Tone", ["Clear & academic", "Modern & engaging", "Professional & executive", "Simple & beginner-friendly"])
 
-    c4, c5 = st.columns(2)
+    c4, c5, c6 = st.columns(3)
     presentation_theme = c4.selectbox("PPT theme", ["Ocean", "Executive", "Creative"])
     presentation_use_notes = c5.checkbox("Prepare speaker-note guidance", value=True)
+    presentation_output_format = c6.selectbox(
+        "Output format",
+        ["PowerPoint (.pptx)", "Google Slides"],
+        key="presentation_output_format",
+        help="PowerPoint downloads directly. Google Slides creates a native Google Slides file when Google Drive integration is configured by the Creator.",
+    )
 
-    generate_presentation = st.button("✨ Generate PowerPoint", key="generate_presentation", use_container_width=True)
+    generate_presentation = st.button("✨ Generate presentation", key="generate_presentation", use_container_width=True)
     if generate_presentation:
         if not presentation_prompt.strip():
             st.error("Please describe what you want the presentation to cover.")
@@ -6876,15 +7016,33 @@ elif st.session_state.page == 9:
             if deck_data:
                 try:
                     deck_bytes = build_pptx_bytes(deck_data, presentation_theme)
+                    google_slides_result = None
+                    google_slides_error = ""
+                    if presentation_output_format == "Google Slides":
+                        with st.spinner("☁️ Creating the presentation in Google Slides..."):
+                            google_slides_result, google_slides_error = export_pptx_to_google_slides(
+                                deck_bytes,
+                                deck_data.get("title") or "StudySphere Presentation",
+                                user_email=EMAIL,
+                            )
+
                     st.session_state.presentation_data = {
                         "deck": deck_data,
                         "bytes": deck_bytes,
                         "theme": presentation_theme,
+                        "output_format": presentation_output_format,
+                        "google_slides": google_slides_result,
+                        "google_slides_error": google_slides_error,
                     }
-                    st.success("Your PowerPoint has been generated.")
+                    if presentation_output_format == "Google Slides" and google_slides_result:
+                        st.success("Your presentation is ready in Google Slides.")
+                    elif presentation_output_format == "Google Slides":
+                        st.warning("The presentation content was generated, but direct Google Slides export is not configured yet. A PowerPoint backup is available below.")
+                    else:
+                        st.success("Your PowerPoint has been generated.")
                 except Exception as exc:
                     st.session_state.presentation_data = None
-                    st.error(f"PowerPoint creation failed: {type(exc).__name__}: {exc}")
+                    st.error(f"Presentation creation failed: {type(exc).__name__}: {exc}")
             else:
                 st.session_state.presentation_data = None
                 st.error(deck_error or "The presentation could not be generated.")
@@ -6920,13 +7078,36 @@ elif st.session_state.page == 9:
                     st.write(" → ".join(str(x) for x in (slide_item.get("steps") or [])))
 
         safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", deck_title).strip("_") or "StudySphere_Presentation"
-        st.download_button(
-            "⬇️ Download PowerPoint (.pptx)",
-            data=presentation_data["bytes"],
-            file_name=f"{safe_name}.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            use_container_width=True,
-        )
+        if presentation_data.get("output_format") == "Google Slides":
+            google_slides_result = presentation_data.get("google_slides")
+            if google_slides_result:
+                st.link_button(
+                    "🌐 Open in Google Slides",
+                    google_slides_result["url"],
+                    use_container_width=True,
+                )
+                if google_slides_result.get("share_note"):
+                    st.warning(google_slides_result["share_note"].strip())
+            else:
+                google_error = str(presentation_data.get("google_slides_error") or "").strip()
+                if google_error:
+                    st.info(google_error)
+
+            st.download_button(
+                "⬇️ Download PowerPoint backup (.pptx)",
+                data=presentation_data["bytes"],
+                file_name=f"{safe_name}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+            )
+        else:
+            st.download_button(
+                "⬇️ Download PowerPoint (.pptx)",
+                data=presentation_data["bytes"],
+                file_name=f"{safe_name}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+            )
 
         if st.button("🗑️ Clear presentation", key="clear_presentation", use_container_width=True):
             st.session_state.presentation_data = None
@@ -8847,13 +9028,20 @@ elif st.session_state.page == 10:
         source_suffix = file_name.rsplit(".", 1)[-1].upper() if "." in file_name else "FILE"
         converter_left, converter_right = st.columns(2)
         converter_left.markdown(f'<div class="panel"><div class="panel-title">📄 Source file</div><div class="panel-sub">{file_name} • {source_suffix} • {converter_file.size / 1024:.1f} KB</div></div>', unsafe_allow_html=True)
-        output_format = converter_right.selectbox("Convert to", ["PDF", "DOCX", "TXT", "Markdown"], key="document_converter_output")
+        output_format = converter_right.selectbox(
+            "Convert to",
+            ["PDF", "Word (.docx)", "TXT", "Markdown"],
+            key="document_converter_output",
+            help="PDF → Word (.docx) is fully supported. Text is extracted from the PDF and rebuilt as an editable Word document.",
+        )
 
         default_title = re.sub(r"[_-]+", " ", file_name.rsplit(".", 1)[0]).strip()
         converter_title = st.text_input("Document title", value=default_title, key="document_converter_title")
 
         st.markdown('<div class="section-kicker" style="margin-top:16px;">Conversion map</div>', unsafe_allow_html=True)
-        st.markdown("**PDF / DOCX / TXT / Markdown**  →  **PDF / DOCX / TXT / Markdown**")
+        st.markdown("**PDF / DOCX / TXT / Markdown**  →  **PDF / Word (.docx) / TXT / Markdown**")
+        if source_suffix == "PDF":
+            st.caption("📝 PDF → Word (.docx) is available here. StudySphere extracts readable PDF text and rebuilds it as an editable Word document.")
 
         convert_button = st.button("✨ Convert document", key="convert_document_button", use_container_width=True)
         if convert_button:
