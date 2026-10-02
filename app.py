@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 import json
@@ -180,6 +181,12 @@ if "quiz_answered" not in st.session_state:
     st.session_state.quiz_answered = 0
 if "agent_command_text" not in st.session_state:
     st.session_state.agent_command_text = ""
+if "multimodal_tutor_result" not in st.session_state:
+    st.session_state.multimodal_tutor_result = ""
+if "multimodal_tutor_image_name" not in st.session_state:
+    st.session_state.multimodal_tutor_image_name = ""
+if "adaptive_topic_filter" not in st.session_state:
+    st.session_state.adaptive_topic_filter = "All"
 
 # ============================================================
 # DATABASE / PRODUCTION FOUNDATION
@@ -503,6 +510,9 @@ cursor.execute("CREATE TABLE IF NOT EXISTS faculty_ai_history (id TEXT PRIMARY K
 # course teaching material. Scope is enforced by institution + department
 # authorization at retrieval time.
 cursor.execute("CREATE TABLE IF NOT EXISTS university_knowledge_sources (id TEXT PRIMARY KEY, institution_id TEXT NOT NULL, scope_type TEXT NOT NULL DEFAULT 'university', department_id TEXT, category TEXT NOT NULL DEFAULT 'General', title TEXT NOT NULL, file_type TEXT NOT NULL, content_text TEXT NOT NULL, file_hash TEXT NOT NULL, uploaded_by TEXT NOT NULL, uploaded_at TEXT NOT NULL, active INTEGER DEFAULT 1)")
+cursor.execute("CREATE TABLE IF NOT EXISTS learning_mistakes (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, subject_id INTEGER, topic TEXT NOT NULL DEFAULT 'General', question TEXT NOT NULL, student_answer TEXT, correct_answer TEXT NOT NULL, explanation TEXT DEFAULT '', source TEXT DEFAULT '', created_at TEXT NOT NULL, resolved INTEGER DEFAULT 0)")
+cursor.execute("CREATE TABLE IF NOT EXISTS learning_attempts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, subject_id INTEGER, topic TEXT NOT NULL DEFAULT 'General', question TEXT NOT NULL, correct INTEGER NOT NULL DEFAULT 0, source TEXT DEFAULT '', created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS student_ai_preferences (user_id TEXT PRIMARY KEY, allow_profile INTEGER NOT NULL DEFAULT 1, allow_academic INTEGER NOT NULL DEFAULT 1, allow_documents INTEGER NOT NULL DEFAULT 1, allow_learning_history INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
 
 # ============================================================
 # INTEGRATION FOUNDATION (STEP 9)
@@ -3830,6 +3840,24 @@ STUDYSPHERE_AGENT_TOOLS = [
     },
     {
         "type": "function",
+        "name": "save_learning_mistake",
+        "description": "Save a student's explicitly identified learning mistake into their private Mistake Book so future adaptive study recommendations can target it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "question": {"type": "string"},
+                "student_answer": {"type": "string"},
+                "correct_answer": {"type": "string"},
+                "explanation": {"type": "string"},
+                "subject_id": {"type": "integer"},
+                "source": {"type": "string"},
+            },
+            "required": ["topic", "question", "correct_answer"],
+        },
+    },
+    {
+        "type": "function",
         "name": "create_subject",
         "description": "Create a new subject for the signed-in student. This is a real database action. Only use it when the student explicitly asks to add/create a subject.",
         "parameters": {
@@ -3973,6 +4001,9 @@ def _agent_tool_list_subjects(user_id, _args):
 
 
 def _agent_tool_search_study_material(user_id, args):
+    prefs = get_student_ai_preferences(user_id)
+    if not prefs["allow_documents"]:
+        return {"ok": False, "error": "Document access is disabled in AI Privacy settings."}
     query = _agent_string(args.get("query"))
     limit = max(1, min(12, int(args.get("limit") or 6)))
     if not query:
@@ -3997,6 +4028,22 @@ def _agent_tool_search_study_material(user_id, args):
             "content": content,
         })
     return {"ok": True, "query": query, "results": results}
+
+
+def _agent_tool_save_learning_mistake(user_id, args):
+    prefs = get_student_ai_preferences(user_id)
+    if not prefs["allow_learning_history"]:
+        return {"ok": False, "error": "Learning history is disabled in AI Privacy settings."}
+    return save_learning_mistake(
+        user_id,
+        args.get("topic"),
+        args.get("question"),
+        args.get("student_answer"),
+        args.get("correct_answer"),
+        args.get("explanation"),
+        args.get("subject_id"),
+        args.get("source", "AI Agent"),
+    )
 
 
 def _agent_tool_create_subject(user_id, args):
@@ -4178,6 +4225,7 @@ def _agent_tool_update_study_task(user_id, args):
 
 
 STUDYSPHERE_AGENT_TOOL_HANDLERS = {
+    "save_learning_mistake": _agent_tool_save_learning_mistake,
     "get_student_academic_records": _agent_tool_get_student_academic_records,
     "list_subjects": _agent_tool_list_subjects,
     "search_study_material": _agent_tool_search_study_material,
@@ -4249,6 +4297,7 @@ def _build_studysphere_agent_instruction(academic_context):
         "Do not pretend to perform an action: call the appropriate tool, inspect the result, and only then report success. "
         "Use get_student_academic_records or list_subjects before making claims about the student's current data. "
         "Use search_study_material when the user asks about uploaded notes or authorized university material. "
+        "If the student explicitly tells you about a mistake they made, you may save it with save_learning_mistake so adaptive study recommendations can use it. "
         "When the user explicitly asks to create/update a StudySphere record, use the write tool instead of merely drafting text. "
         "Never invent missing dates, subjects, deadlines, IDs, scores, or other stored facts. Ask the user for any required value that is missing. "
         "For create_exam/create_assignment/create_study_task, an exact YYYY-MM-DD date is required unless the student supplies a date that you can normalize. "
@@ -5071,10 +5120,23 @@ def university_course_context_for_user(user_id):
     return {"authorized_university_courses": course_items}
 
 def academic_context_for_chat(auth_id, rag_context=""):
+    prefs = get_student_ai_preferences(auth_id)
     context = build_agent_context(auth_id)
     context.update(university_course_context_for_user(auth_id))
+    if not prefs["allow_profile"]:
+        context["profile"] = []
+    if not prefs["allow_academic"]:
+        context["subjects"] = []
+        context["assignments"] = []
+        context["upcoming_exams"] = []
+        context["study_tasks"] = []
+        context["authorized_university_courses"] = []
+    if not prefs["allow_documents"]:
+        context["uploaded_documents"] = []
+    if not prefs["allow_learning_history"]:
+        context.pop("learning_mistakes", None)
     base_context = format_agent_context(context)
-    if rag_context:
+    if rag_context and prefs["allow_documents"]:
         return base_context + "\n\nRelevant authorized knowledge retrieved for this user (personal documents and/or authorized university course material):\n" + rag_context
     return base_context
 
@@ -5272,6 +5334,7 @@ def build_agent_context(auth_id):
         "upcoming_exams": exams,
         "study_tasks": tasks,
         "uploaded_documents": documents,
+        "learning_mistakes": [list(row) for row in list_learning_mistakes(auth_id, unresolved_only=True, limit=20)] if get_student_ai_preferences(auth_id)["allow_learning_history"] else [],
         "authorized_university_courses": university_course_context.get("authorized_university_courses", []),
     }
 
@@ -6770,6 +6833,283 @@ def _student_make_cloze_cards(text_value, limit=20):
     return cards
 
 
+
+# ============================================================
+# ADVANCED AI + ADAPTIVE LEARNING HELPERS
+# ============================================================
+
+def get_student_ai_preferences(user_id):
+    row = cursor.execute(
+        "SELECT allow_profile, allow_academic, allow_documents, allow_learning_history FROM student_ai_preferences WHERE user_id = ?",
+        (str(user_id),),
+    ).fetchone()
+    if not row:
+        now = datetime.now().isoformat(timespec="seconds")
+        cursor.execute(
+            "INSERT INTO student_ai_preferences (user_id, allow_profile, allow_academic, allow_documents, allow_learning_history, updated_at) VALUES (?, 1, 1, 1, 1, ?)",
+            (str(user_id), now),
+        )
+        conn.commit()
+        return {"allow_profile": True, "allow_academic": True, "allow_documents": True, "allow_learning_history": True}
+    return {
+        "allow_profile": bool(int(row[0] or 0)),
+        "allow_academic": bool(int(row[1] or 0)),
+        "allow_documents": bool(int(row[2] or 0)),
+        "allow_learning_history": bool(int(row[3] or 0)),
+    }
+
+
+def save_student_ai_preferences(user_id, allow_profile, allow_academic, allow_documents, allow_learning_history):
+    now = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO student_ai_preferences (user_id, allow_profile, allow_academic, allow_documents, allow_learning_history, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET allow_profile = excluded.allow_profile, allow_academic = excluded.allow_academic, allow_documents = excluded.allow_documents, allow_learning_history = excluded.allow_learning_history, updated_at = excluded.updated_at",
+        (str(user_id), int(bool(allow_profile)), int(bool(allow_academic)), int(bool(allow_documents)), int(bool(allow_learning_history)), now),
+    )
+    conn.commit()
+
+
+def save_learning_attempt(user_id, topic, question, correct, subject_id=None, source=""):
+    try:
+        cursor.execute(
+            "INSERT INTO learning_attempts (id, user_id, subject_id, topic, question, correct, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (f"attempt-{uuid.uuid4().hex}", str(user_id), subject_id, str(topic or "General")[:180], str(question or "")[:1200], int(bool(correct)), str(source or "")[:120], datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def save_learning_mistake(user_id, topic, question, student_answer, correct_answer, explanation="", subject_id=None, source=""):
+    question = str(question or "").strip()
+    correct_answer = str(correct_answer or "").strip()
+    if not question or not correct_answer:
+        return {"ok": False, "error": "A question and correct answer are required."}
+    topic = str(topic or "General").strip()[:180] or "General"
+    existing = cursor.execute(
+        "SELECT id, resolved FROM learning_mistakes WHERE user_id = ? AND lower(question) = lower(?) AND lower(correct_answer) = lower(?) ORDER BY created_at DESC LIMIT 1",
+        (str(user_id), question[:1200], correct_answer[:500]),
+    ).fetchone()
+    now = datetime.now().isoformat(timespec="seconds")
+    if existing:
+        cursor.execute(
+            "UPDATE learning_mistakes SET topic = ?, student_answer = ?, explanation = ?, source = ?, resolved = 0, created_at = ?, subject_id = ? WHERE id = ? AND user_id = ?",
+            (topic, str(student_answer or "")[:500], str(explanation or "")[:1200], str(source or "")[:120], now, subject_id, existing[0], str(user_id)),
+        )
+        conn.commit()
+        return {"ok": True, "id": str(existing[0]), "updated": True}
+    mistake_id = f"mistake-{uuid.uuid4().hex}"
+    cursor.execute(
+        "INSERT INTO learning_mistakes (id, user_id, subject_id, topic, question, student_answer, correct_answer, explanation, source, created_at, resolved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+        (mistake_id, str(user_id), subject_id, topic, question[:1200], str(student_answer or "")[:500], correct_answer[:500], str(explanation or "")[:1200], str(source or "")[:120], now),
+    )
+    conn.commit()
+    return {"ok": True, "id": mistake_id, "updated": False}
+
+
+def list_learning_mistakes(user_id, unresolved_only=False, limit=100):
+    sql = "SELECT id, subject_id, topic, question, student_answer, correct_answer, explanation, source, created_at, resolved FROM learning_mistakes WHERE user_id = ?"
+    params = [str(user_id)]
+    if unresolved_only:
+        sql += " AND resolved = 0"
+    sql += " ORDER BY resolved ASC, created_at DESC LIMIT ?"
+    params.append(int(max(1, min(300, limit))))
+    return cursor.execute(sql, tuple(params)).fetchall()
+
+
+def resolve_learning_mistake(user_id, mistake_id):
+    cursor.execute(
+        "UPDATE learning_mistakes SET resolved = 1 WHERE id = ? AND user_id = ?",
+        (str(mistake_id), str(user_id)),
+    )
+    conn.commit()
+
+
+def adaptive_learning_summary(user_id):
+    rows = cursor.execute(
+        "SELECT topic, COUNT(*) AS attempts, SUM(correct) AS correct_attempts FROM learning_attempts WHERE user_id = ? GROUP BY topic ORDER BY attempts DESC, topic",
+        (str(user_id),),
+    ).fetchall()
+    mistakes = cursor.execute(
+        "SELECT topic, COUNT(*) FROM learning_mistakes WHERE user_id = ? AND resolved = 0 GROUP BY topic ORDER BY COUNT(*) DESC, topic",
+        (str(user_id),),
+    ).fetchall()
+    by_topic = {}
+    for topic, attempts, correct in rows:
+        topic_name = str(topic or "General")
+        by_topic[topic_name] = {
+            "attempts": int(attempts or 0),
+            "correct": int(correct or 0),
+            "accuracy": (float(correct or 0) / float(attempts or 1)) * 100.0,
+            "mistakes": 0,
+        }
+    for topic, count in mistakes:
+        topic_name = str(topic or "General")
+        by_topic.setdefault(topic_name, {"attempts": 0, "correct": 0, "accuracy": 0.0, "mistakes": 0})["mistakes"] = int(count or 0)
+    topics = []
+    for topic_name, info in by_topic.items():
+        if info["mistakes"] > 0 or info["attempts"] > 0:
+            if info["accuracy"] < 60 or info["mistakes"] >= 2:
+                level = "Needs review"
+            elif info["accuracy"] < 80 or info["mistakes"] == 1:
+                level = "Practice"
+            else:
+                level = "Strong"
+            topics.append({"topic": topic_name, **info, "level": level})
+    topics.sort(key=lambda item: (-item["mistakes"], item["accuracy"], item["topic"].casefold()))
+    return topics
+
+
+def adaptive_study_recommendations(user_id, limit=5):
+    recommendations = []
+    today_value = date.today()
+    topics = adaptive_learning_summary(user_id)
+    for topic in topics:
+        if topic["level"] == "Needs review":
+            recommendations.append({
+                "title": f"Review {topic['topic']}",
+                "detail": f"{topic['mistakes']} unresolved mistake(s) and {topic['accuracy']:.0f}% quiz accuracy from {topic['attempts']} attempt(s).",
+                "priority": "High",
+                "topic": topic["topic"],
+            })
+        elif topic["level"] == "Practice":
+            recommendations.append({
+                "title": f"Practice {topic['topic']}",
+                "detail": f"Current accuracy is {topic['accuracy']:.0f}%. A short targeted practice session should reinforce this topic.",
+                "priority": "Medium",
+                "topic": topic["topic"],
+            })
+    upcoming = cursor.execute(
+        "SELECT title, exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exam_date >= ? ORDER BY exam_date LIMIT 1",
+        (str(user_id), today_value.isoformat()),
+    ).fetchone()
+    if upcoming:
+        parsed = _student_parse_date(upcoming[1])
+        if parsed:
+            days_left = (parsed - today_value).days
+            if days_left <= 7:
+                recommendations.append({
+                    "title": f"Prepare for {upcoming[0]}",
+                    "detail": f"{upcoming[2] or 'General'} exam is in {days_left} day(s). Use Exam Preparation and your weak-topic list together.",
+                    "priority": "High",
+                    "topic": upcoming[2] or "Exam preparation",
+                })
+    open_tasks = int(cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 0", (str(user_id),)).fetchone()[0] or 0)
+    if open_tasks >= 6:
+        recommendations.append({
+            "title": "Reduce study backlog",
+            "detail": f"You have {open_tasks} open study task(s). Work on the highest-priority task before starting a new topic.",
+            "priority": "Medium",
+            "topic": "Workload",
+        })
+    return recommendations[:int(max(1, limit))]
+
+
+def _prepare_multimodal_image(file_bytes, mime_type):
+    raw = bytes(file_bytes or b"")
+    if not raw:
+        raise ValueError("The image is empty.")
+    mime = str(mime_type or "image/jpeg").lower()
+    if len(raw) <= 8 * 1024 * 1024 and mime in {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif", "image/bmp", "image/tiff"}:
+        return raw, mime
+    if Image is None:
+        raise RuntimeError("Pillow is required to prepare large images for AI analysis.")
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    if max(image.size) > 1800:
+        scale = 1800 / float(max(image.size))
+        image = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=88, optimize=True)
+    return output.getvalue(), "image/jpeg"
+
+
+def multimodal_tutor_request(api_key, image_bytes, image_mime, user_prompt, student_context=""):
+    """Analyze a student's image with the current Gemini Interactions multimodal input format."""
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return "", "The Multimodal AI Tutor is not configured. Add the Gemini API key first."
+    try:
+        prepared_bytes, prepared_mime = _prepare_multimodal_image(image_bytes, image_mime)
+    except Exception as exc:
+        return "", f"Could not prepare the image: {type(exc).__name__}: {exc}"
+    prompt = str(user_prompt or "").strip() or "Explain what is shown in this image and teach it to me step by step."
+    context = str(student_context or "").strip()
+    full_prompt = (
+        "You are StudySphere Multimodal Tutor. Analyze the provided student image carefully. "
+        "If it is a problem, diagram, chart, handwritten solution, code screenshot, or lecture slide, explain the visible content step by step. "
+        "Do not invent text that is not readable. Clearly say when part of the image is unclear. "
+        "Use the student's optional context only to personalize the explanation. Keep the response educational, structured, and practical.\n\n"
+        f"Student request: {prompt}\n\nStudent context:\n{context}"
+    )
+    models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    encoded = base64.b64encode(prepared_bytes).decode("ascii")
+    last_error = "No compatible multimodal model responded."
+    for model in models:
+        payload = {
+            "model": model,
+            "input": [
+                {"type": "text", "text": full_prompt},
+                {"type": "image", "data": encoded, "mime_type": prepared_mime},
+            ],
+        }
+        request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1/interactions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            answer = _agent_extract_output_text(data)
+            if answer:
+                return answer, ""
+            last_error = f"{model} returned no text."
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+                parsed = json.loads(detail) if detail else {}
+                last_error = str(((parsed.get("error") or {}).get("message") or "Gemini request failed.")).strip()
+            except Exception:
+                last_error = "Gemini request failed."
+            if exc.code in (401, 403):
+                return "", "Gemini authentication failed. Check the configured API key."
+            if exc.code == 429:
+                return "", "Gemini quota/rate limit reached. The Multimodal Tutor will work again when the API quota becomes available."
+            if exc.code in (400, 404, 408, 500, 502, 503, 504):
+                continue
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+    return "", last_error
+
+
+def multimodal_tutor_context(user_id):
+    prefs = get_student_ai_preferences(user_id)
+    parts = []
+    if prefs["allow_profile"]:
+        profile = cursor.execute("SELECT university, degree, semester, career_goal FROM users WHERE auth_id = ?", (str(user_id),)).fetchone()
+        if profile:
+            parts.append("Profile: " + json.dumps(list(profile), default=str))
+    if prefs["allow_academic"]:
+        parts.append("Academic: " + format_agent_context(build_agent_context(user_id)))
+    if prefs["allow_learning_history"]:
+        parts.append("Learning: " + json.dumps(adaptive_learning_summary(user_id), ensure_ascii=False, default=str))
+    return "\n".join(parts)
+
+
+def student_learning_export_csv(user_id):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Type", "Topic", "Question", "Student Answer", "Correct Answer", "Accuracy/Resolved", "Created"])
+    for row in list_learning_mistakes(user_id, unresolved_only=False, limit=300):
+        writer.writerow(["Mistake", row[2], row[3], row[4] or "", row[5], "Resolved" if row[9] else "Open", row[8]])
+    attempts = cursor.execute("SELECT topic, question, correct, source, created_at FROM learning_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 500", (str(user_id),)).fetchall()
+    for row in attempts:
+        writer.writerow(["Attempt", row[0], row[1], "", "", "Correct" if row[2] else "Incorrect", row[4]])
+    return output.getvalue().encode("utf-8")
+
+
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -6834,6 +7174,10 @@ if st.session_state.user_role == "student":
     nav_options.append((29, "🧭  Academic Insights"))
     nav_options.append((30, "📈  My Progress"))
     nav_options.append((31, "🔗  LMS & Study Sync"))
+    nav_options.append((32, "🖼️  Multimodal AI Tutor"))
+    nav_options.append((33, "🧠  Adaptive Learning"))
+    nav_options.append((34, "🔐  AI Privacy"))
+    nav_options.append((35, "💼  Career & Skills Roadmap"))
 if has_permission("manage_university"):
     nav_options.append((22, "💰  Student Fees"))
     nav_options.append((17, "🔗  Integration Center"))
@@ -6875,6 +7219,9 @@ if st.session_state.page == 20 and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
 if st.session_state.page == 21 and st.session_state.user_role != "student":
+    st.session_state.page = 1
+    st.rerun()
+if st.session_state.page in {32, 33, 34, 35} and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
 for _student_only_page in (24, 25, 26, 27, 28, 29, 30, 31):
@@ -6935,6 +7282,19 @@ if has_permission("manage_university") and st.sidebar.button("💰 Student Fees"
 if st.sidebar.button("🏛️ University Knowledge AI", key="university_knowledge_sidebar", use_container_width=True):
     st.session_state.page = 16
     st.rerun()
+if st.session_state.user_role == "student":
+    if st.sidebar.button("🖼️ Multimodal AI Tutor", key="multimodal_tutor_sidebar", use_container_width=True):
+        st.session_state.page = 32
+        st.rerun()
+    if st.sidebar.button("🧠 Adaptive Learning", key="adaptive_learning_sidebar", use_container_width=True):
+        st.session_state.page = 33
+        st.rerun()
+    if st.sidebar.button("🔐 AI Privacy", key="ai_privacy_sidebar", use_container_width=True):
+        st.session_state.page = 34
+        st.rerun()
+    if st.sidebar.button("💼 Career Roadmap", key="career_roadmap_sidebar", use_container_width=True):
+        st.session_state.page = 35
+        st.rerun()
 if has_permission("manage_users"):
     st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
     if st.sidebar.button("🔐 Creator Dashboard", key="creator_dashboard_sidebar", use_container_width=True):
@@ -9980,10 +10340,20 @@ elif st.session_state.page == 26:
             quiz_choice = st.radio("Complete the statement:", quiz_options, key=f"quiz_choice_{idx}")
             if st.button("Check answer", key=f"quiz_check_{idx}", use_container_width=True):
                 st.session_state.quiz_answered += 1
-                if quiz_choice.casefold() == current_quiz["answer"].casefold():
+                quiz_topic = "General"
+                selected_doc_name = str(globals().get("selected_doc", [None, "General"])[1] if "selected_doc" in globals() and selected_doc else "General")
+                quiz_topic = selected_doc_name or "General"
+                is_correct = quiz_choice.casefold() == current_quiz["answer"].casefold()
+                save_learning_attempt(AUTH_ID, quiz_topic, current_quiz["question"], is_correct, source="Flashcards & Quiz")
+                if is_correct:
                     st.session_state.quiz_score += 1
                     st.success("Correct — nice work.")
                 else:
+                    save_learning_mistake(
+                        AUTH_ID, quiz_topic, current_quiz["question"], quiz_choice, current_quiz["answer"],
+                        "Review the original sentence and explain why the correct term fits the blank.",
+                        source="Flashcards & Quiz",
+                    )
                     st.error(f"Not quite. The correct answer is {current_quiz['answer']}.")
             st.caption(f"Quiz score: {st.session_state.quiz_score}/{st.session_state.quiz_answered or 0}")
         else:
@@ -10143,6 +10513,148 @@ elif st.session_state.page == 31:
         st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🔄 Recent synchronization</div><div class="panel-sub">Latest university-managed integration runs.</div></div>', unsafe_allow_html=True)
         st.dataframe([{"Integration": row[0], "Status": row[1], "Finished": row[2] or "—", "Message": row[3] or ""} for row in latest_runs], use_container_width=True, hide_index=True)
     st.markdown('<div class="ai-panel"><div class="ai-badge">Institutional interoperability</div><div class="ai-title">StudySphere stays inside your authorized academic scope</div><div class="ai-text">University integrations can feed courses, sections, enrollments and published academic information into StudySphere. The student view only exposes records authorized for the signed-in account.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 32:
+    st.markdown('<div class="page-banner"><div class="page-title">🖼️ Multimodal AI Tutor</div><div class="page-sub">Upload a problem, diagram, handwritten solution, chart, code screenshot, or lecture slide and ask StudySphere to teach it.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Multimodal • Gemini 3.8</div><div class="ai-title">See the problem, not just the words</div><div class="ai-text">StudySphere can analyze an image together with your question. Image input uses the Gemini Interactions API and respects your AI Privacy settings.</div></div>', unsafe_allow_html=True)
+    tutor_left, tutor_right = st.columns([1, 1.15])
+    with tutor_left:
+        tutor_image = st.file_uploader(
+            "Upload a study image",
+            type=["png", "jpg", "jpeg", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff"],
+            key="multimodal_tutor_upload",
+            help="For best results, upload a clear image. Large images are automatically resized before analysis.",
+        )
+        if tutor_image:
+            st.image(tutor_image, caption=tutor_image.name, use_container_width=True)
+    with tutor_right:
+        tutor_mode = st.selectbox("What should the Tutor do?", ["Explain step by step", "Solve and explain", "Check my work", "Explain a diagram/chart", "Read and summarize", "Explain code screenshot"], key="multimodal_tutor_mode")
+        tutor_prompt = st.text_area("Your question", height=150, placeholder="Example: I got step 3 wrong. Show me exactly where my solution went wrong and then teach me the correct method.", key="multimodal_tutor_prompt")
+        tutor_context = st.text_area("Optional context", height=90, placeholder="Example: This is from my Database Systems course.", key="multimodal_tutor_context")
+        analyze_image = st.button("🧠 Analyze with StudySphere", key="multimodal_tutor_button", use_container_width=True)
+        if analyze_image:
+            if not tutor_image:
+                st.warning("Upload an image first.")
+            else:
+                mode_instruction = {
+                    "Explain step by step": "Explain the visible material step by step and teach the underlying concept.",
+                    "Solve and explain": "Solve the visible problem carefully and explain every important step.",
+                    "Check my work": "Inspect the student's visible work, identify mistakes, and explain how to correct them.",
+                    "Explain a diagram/chart": "Explain the visible diagram or chart, including relationships, labels, and what a student should remember.",
+                    "Read and summarize": "Read the visible material and produce a concise study summary with key points.",
+                    "Explain code screenshot": "Read the visible code and explain what it does, then identify likely bugs or confusing sections.",
+                }[tutor_mode]
+                combined_prompt = mode_instruction + "\n\n" + str(tutor_prompt or "")
+                with st.spinner("StudySphere is examining the image…"):
+                    result_text, error_text = multimodal_tutor_request(
+                        GLOBAL_GEMINI_API_KEY,
+                        tutor_image.getvalue(),
+                        tutor_image.type,
+                        combined_prompt,
+                        str(tutor_context or "") + "\n" + multimodal_tutor_context(AUTH_ID),
+                    )
+                if error_text:
+                    st.error(error_text)
+                else:
+                    st.session_state.multimodal_tutor_result = result_text
+                    st.session_state.multimodal_tutor_image_name = tutor_image.name
+                    st.rerun()
+    if st.session_state.get("multimodal_tutor_result"):
+        st.markdown('<div class="section-kicker" style="margin-top:22px;">Tutor explanation</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="panel"><div class="panel-title">🧠 {st.session_state.get("multimodal_tutor_image_name") or "Study image"}</div><div class="panel-sub">This explanation was generated from the image and the request you supplied.</div></div>', unsafe_allow_html=True)
+        st.markdown(st.session_state.multimodal_tutor_result)
+        if st.button("🗑️ Clear tutor result", key="clear_multimodal_tutor", use_container_width=True):
+            st.session_state.multimodal_tutor_result = ""
+            st.session_state.multimodal_tutor_image_name = ""
+            st.rerun()
+
+elif st.session_state.page == 33:
+    st.markdown('<div class="page-banner"><div class="page-title">🧠 Adaptive Learning</div><div class="page-sub">StudySphere learns from quiz attempts and saved mistakes to show what deserves practice next.</div></div>', unsafe_allow_html=True)
+    summary_topics = adaptive_learning_summary(AUTH_ID)
+    unresolved_mistakes = list_learning_mistakes(AUTH_ID, unresolved_only=True, limit=100)
+    recommendations = adaptive_study_recommendations(AUTH_ID, limit=6)
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Topics tracked", len(summary_topics))
+    a2.metric("Open mistakes", len(unresolved_mistakes))
+    total_attempts = int(cursor.execute("SELECT COUNT(*) FROM learning_attempts WHERE user_id = ?", (AUTH_ID,)).fetchone()[0] or 0)
+    a3.metric("Learning attempts", total_attempts)
+
+    if recommendations:
+        st.markdown('<div class="section-kicker">Recommended next moves</div>', unsafe_allow_html=True)
+        for rec in recommendations:
+            st.markdown(f'<div class="insight-card"><div><div class="panel-title">{rec["title"]}</div><div class="panel-sub">{rec["detail"]}</div></div><div class="insight-status">{rec["priority"]}</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="section-kicker" style="margin-top:22px;">Learning map</div>', unsafe_allow_html=True)
+    if summary_topics:
+        st.dataframe([
+            {"Topic": item["topic"], "Attempts": item["attempts"], "Accuracy": f'{item["accuracy"]:.0f}%', "Open mistakes": item["mistakes"], "Level": item["level"]}
+            for item in summary_topics
+        ], use_container_width=True, hide_index=True)
+    else:
+        st.info("Your adaptive map will appear after you complete a quiz or save a learning mistake.")
+
+    st.markdown('<div class="section-kicker" style="margin-top:22px;">📖 Mistake Book</div>', unsafe_allow_html=True)
+    if unresolved_mistakes:
+        for mistake in unresolved_mistakes[:50]:
+            with st.expander(f'{mistake[2]} • {mistake[3][:90]}'):
+                st.write(f"**Your answer:** {mistake[4] or '—'}")
+                st.write(f"**Correct answer:** {mistake[5]}")
+                if mistake[6]:
+                    st.write(f"**Why:** {mistake[6]}")
+                st.caption(f"Source: {mistake[7] or 'StudySphere'} • {mistake[8]}")
+                if st.button("✅ Mark mastered", key=f"resolve_mistake_{mistake[0]}", use_container_width=True):
+                    resolve_learning_mistake(AUTH_ID, mistake[0])
+                    st.rerun()
+    else:
+        st.success("Your Mistake Book is clear. Keep practicing to maintain your progress.")
+
+    b1, b2 = st.columns(2)
+    if b1.button("🎯 Open Exam Preparation", key="adaptive_open_exam_prep", use_container_width=True):
+        st.session_state.page = 24
+        st.rerun()
+    b2.download_button("📥 Export learning history", data=student_learning_export_csv(AUTH_ID), file_name="studysphere_learning_history.csv", mime="text/csv", use_container_width=True, key="export_learning_history")
+
+elif st.session_state.page == 34:
+    st.markdown('<div class="page-banner"><div class="page-title">🔐 AI Privacy & Controls</div><div class="page-sub">Choose what StudySphere AI is allowed to use when helping you.</div></div>', unsafe_allow_html=True)
+    prefs = get_student_ai_preferences(AUTH_ID)
+    st.markdown('<div class="panel"><div class="panel-title">Your AI data controls</div><div class="panel-sub">These switches control the context supplied to StudySphere AI and the learning history used for adaptive recommendations. Disabling a category does not delete the underlying academic record.</div></div>', unsafe_allow_html=True)
+    p_profile = st.checkbox("Allow AI to use my profile (degree, semester, career goal)", value=prefs["allow_profile"], key="privacy_allow_profile")
+    p_academic = st.checkbox("Allow AI to use my academic records (subjects, assignments, exams, tasks)", value=prefs["allow_academic"], key="privacy_allow_academic")
+    p_documents = st.checkbox("Allow AI to search my uploaded documents and study material", value=prefs["allow_documents"], key="privacy_allow_documents")
+    p_learning = st.checkbox("Allow AI to use my learning history and Mistake Book", value=prefs["allow_learning_history"], key="privacy_allow_learning")
+    if st.button("💾 Save AI privacy settings", key="save_ai_privacy", use_container_width=True):
+        save_student_ai_preferences(AUTH_ID, p_profile, p_academic, p_documents, p_learning)
+        st.success("AI privacy settings saved.")
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Important</div><div class="ai-title">You stay in control</div><div class="ai-text">StudySphere never displays your API key to students. Turning off a context category affects new AI requests; it does not erase your database records. Your existing quizzes, documents, attendance, assignments, and other records remain available in their normal app pages.</div></div>', unsafe_allow_html=True)
+
+elif st.session_state.page == 35:
+    st.markdown('<div class="page-banner"><div class="page-title">💼 Career & Skills Roadmap</div><div class="page-sub">Turn your existing degree, career goal, and skills into a practical university-to-career roadmap.</div></div>', unsafe_allow_html=True)
+    profile = cursor.execute("SELECT degree, semester, career_goal, skills FROM users WHERE auth_id = ?", (AUTH_ID,)).fetchone()
+    degree = str(profile[0] or "").strip() if profile else ""
+    semester = str(profile[1] or "").strip() if profile else ""
+    career_goal = str(profile[2] or "").strip() if profile else ""
+    skills = [item.strip() for item in re.split(r"[,\n;]", str(profile[3] or "")) if item.strip()] if profile else []
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Degree", degree or "Not set")
+    r2.metric("Semester", semester or "Not set")
+    r3.metric("Skills listed", len(skills))
+    if not career_goal:
+        st.info("Add a career goal from Profile to build a more specific roadmap.")
+    else:
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">Career goal</div><div class="ai-title">{career_goal}</div><div class="ai-text">Your roadmap uses the profile information you have stored in StudySphere. It does not claim that any step is required by a university or employer.</div></div>', unsafe_allow_html=True)
+        steps = [
+            ("01", "Strengthen academic fundamentals", f"Prioritize your {degree or 'degree'} subjects and keep your core concepts current."),
+            ("02", "Build job-relevant skills", "Turn the skills you already listed into small weekly practice goals."),
+            ("03", "Create evidence of ability", "Use projects, presentations, assignments, and documented work to build a portfolio."),
+            ("04", "Practice professional communication", "Keep improving explanation, presentation, and interview-style communication."),
+            ("05", "Review progress each semester", "Use My Progress and the Adaptive Learning page to identify gaps and choose the next skill to develop."),
+        ]
+        for number, title, detail in steps:
+            st.markdown(f'<div class="insight-card"><div style="min-width:42px;font-weight:900;color:var(--ss-accent);">{number}</div><div style="flex:1;"><div class="panel-title">{title}</div><div class="panel-sub">{detail}</div></div></div>', unsafe_allow_html=True)
+        if skills:
+            st.markdown('<div class="section-kicker" style="margin-top:22px;">Your current skills</div>', unsafe_allow_html=True)
+            st.write(" • ".join(skills))
 
 elif st.session_state.page == 23:
     st.markdown('<div class="page-banner"><div class="page-title">🖼️ Image Compressor</div><div class="page-sub">Reduce image file size for assignments, uploads, websites, and social posts — directly inside StudySphere.</div></div>', unsafe_allow_html=True)
