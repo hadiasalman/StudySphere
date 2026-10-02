@@ -19,6 +19,7 @@ from pathlib import Path
 from collections import Counter
 from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import quote_plus
 
 try:
     from PIL import Image
@@ -177,6 +178,8 @@ if "quiz_score" not in st.session_state:
     st.session_state.quiz_score = 0
 if "quiz_answered" not in st.session_state:
     st.session_state.quiz_answered = 0
+if "agent_command_text" not in st.session_state:
+    st.session_state.agent_command_text = ""
 
 # ============================================================
 # DATABASE / PRODUCTION FOUNDATION
@@ -2090,6 +2093,309 @@ def course_material_text_from_upload(file_name, file_bytes):
         return "\n\n".join(slide_text).strip()
     return _document_plain_text_from_bytes(file_bytes, name).strip()
 
+
+# ============================================================
+# STUDENT COMMAND CENTER / INSIGHTS HELPERS
+# ============================================================
+
+def student_notification_items(user_id):
+    """Build transparent notifications from the student's actual stored records."""
+    today_value = date.today()
+    notifications = []
+
+    overdue = cursor.execute(
+        "SELECT title, deadline FROM assignments WHERE user_id = ? AND deadline < ? AND status <> 'Completed' ORDER BY deadline LIMIT 8",
+        (user_id, today_value.isoformat()),
+    ).fetchall()
+    for title_value, deadline_value in overdue:
+        notifications.append({
+            "type": "urgent",
+            "icon": "🔴",
+            "title": "Overdue assignment",
+            "text": f"{title_value} was due on {deadline_value}.",
+            "date": str(deadline_value),
+        })
+
+    due_soon = cursor.execute(
+        "SELECT title, deadline, priority FROM assignments WHERE user_id = ? AND deadline >= ? AND deadline <= ? AND status <> 'Completed' ORDER BY deadline LIMIT 8",
+        (user_id, today_value.isoformat(), (today_value).isoformat()),
+    ).fetchall()
+    for title_value, deadline_value, priority_value in due_soon:
+        notifications.append({
+            "type": "today",
+            "icon": "📝",
+            "title": "Assignment due today",
+            "text": f"{title_value} is due today ({priority_value or 'Medium'} priority).",
+            "date": str(deadline_value),
+        })
+
+    tomorrow = (today_value + __import__('datetime').timedelta(days=1)).isoformat()
+    due_tomorrow = cursor.execute(
+        "SELECT title, deadline, priority FROM assignments WHERE user_id = ? AND deadline = ? AND status <> 'Completed' ORDER BY title LIMIT 8",
+        (user_id, tomorrow),
+    ).fetchall()
+    for title_value, deadline_value, priority_value in due_tomorrow:
+        notifications.append({
+            "type": "soon",
+            "icon": "🟡",
+            "title": "Assignment due tomorrow",
+            "text": f"{title_value} is due tomorrow ({priority_value or 'Medium'} priority).",
+            "date": str(deadline_value),
+        })
+
+    upcoming_exams = cursor.execute(
+        "SELECT title, exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exam_date >= ? ORDER BY exam_date LIMIT 8",
+        (user_id, today_value.isoformat()),
+    ).fetchall()
+    for title_value, exam_date, subject_value in upcoming_exams:
+        parsed = _student_parse_date(exam_date)
+        if parsed:
+            days = (parsed - today_value).days
+            if days <= 7:
+                notifications.append({
+                    "type": "exam",
+                    "icon": "🎯",
+                    "title": "Exam approaching",
+                    "text": f"{title_value} ({subject_value or 'General'}) is in {days} day(s).",
+                    "date": str(exam_date),
+                })
+
+    attendance_summaries, _, overall = student_attendance_summary(user_id)
+    if overall is not None and overall < 80:
+        notifications.append({
+            "type": "attendance",
+            "icon": "📊",
+            "title": "Attendance needs attention",
+            "text": f"Your overall recorded attendance is {overall:.1f}%, below the 80% reference point.",
+            "date": today_value.isoformat(),
+        })
+
+    try:
+        fees = student_fee_rows(user_id, INSTITUTION_ID)
+        for row in fees:
+            due_value = str(row[5] or "").strip()
+            status_value = str(row[6] or "Pending")
+            if due_value and status_value.lower() != "paid":
+                due_date = _student_parse_date(due_value)
+                if due_date and (due_date - today_value).days <= 7:
+                    notifications.append({
+                        "type": "fee",
+                        "icon": "💳",
+                        "title": "Fee deadline approaching",
+                        "text": f"{row[1]} is due on {due_value}.",
+                        "date": due_value,
+                    })
+    except Exception:
+        pass
+
+    priority = {"urgent": 0, "today": 1, "exam": 2, "soon": 3, "attendance": 4, "fee": 5}
+    notifications.sort(key=lambda item: (priority.get(item["type"], 9), str(item.get("date", "9999-12-31"))))
+    return notifications[:20]
+
+
+def attendance_intelligence(summaries):
+    """Return explainable attendance guidance per class; no hidden scoring."""
+    insights = []
+    for row in summaries:
+        sessions = int(row.get("Sessions") or 0)
+        present = int(row.get("Present") or 0)
+        late = int(row.get("Late") or 0)
+        attended = present + late
+        pct = (attended / sessions * 100.0) if sessions else None
+        if pct is None:
+            continue
+        if pct >= 80:
+            # Maximum classes that can be missed while staying >=80%, using current attended total.
+            safe_misses = max(0, int(math.floor(attended / 0.80 - sessions)))
+            insights.append({
+                "course": row.get("Course") or "Course",
+                "class": row.get("Class") or "Class",
+                "percentage": pct,
+                "status": "On track",
+                "detail": f"You can miss approximately {safe_misses} more session(s) before falling below 80%, based on current records.",
+            })
+        else:
+            # Minimum consecutive attended sessions required to reach 80%.
+            needed = 0
+            while needed < 100 and (attended + needed) / max(1, sessions + needed) < 0.80:
+                needed += 1
+            insights.append({
+                "course": row.get("Course") or "Course",
+                "class": row.get("Class") or "Class",
+                "percentage": pct,
+                "status": "Needs attention",
+                "detail": f"Attend the next {needed} session(s) in a row to reach about 80%, assuming no additional absences.",
+            })
+    return insights
+
+
+def academic_attention_signals(user_id):
+    """Create transparent academic attention indicators from stored records."""
+    today_value = date.today()
+    signals = []
+
+    overdue = int(cursor.execute(
+        "SELECT COUNT(*) FROM assignments WHERE user_id = ? AND deadline < ? AND status <> 'Completed'",
+        (user_id, today_value.isoformat()),
+    ).fetchone()[0] or 0)
+    open_tasks = int(cursor.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 0",
+        (user_id,),
+    ).fetchone()[0] or 0)
+    upcoming_soon = cursor.execute(
+        "SELECT title, exam_date, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exam_date >= ? ORDER BY exam_date LIMIT 1",
+        (user_id, today_value.isoformat()),
+    ).fetchone()
+    prep_task_count = 0
+    if upcoming_soon:
+        prep_date = _student_parse_date(upcoming_soon[1])
+        if prep_date:
+            prep_task_count = int(cursor.execute(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 0 AND subject_id = (SELECT subject_id FROM exams WHERE id = (SELECT id FROM exams WHERE user_id = ? AND exam_date = ? ORDER BY id LIMIT 1))",
+                (user_id, user_id, upcoming_soon[1]),
+            ).fetchone()[0] or 0)
+    att_summaries, _, overall_att = student_attendance_summary(user_id)
+
+    signals.append({
+        "label": "Assignments",
+        "status": "Attention" if overdue else "On track",
+        "detail": f"{overdue} overdue assignment(s)." if overdue else "No overdue assignments.",
+    })
+    signals.append({
+        "label": "Study workload",
+        "status": "Heavy" if open_tasks >= 8 else ("Moderate" if open_tasks >= 4 else "Light"),
+        "detail": f"{open_tasks} open study task(s) currently stored.",
+    })
+    if overall_att is None:
+        signals.append({"label": "Attendance", "status": "No data", "detail": "No attendance records are currently available."})
+    else:
+        signals.append({
+            "label": "Attendance",
+            "status": "Attention" if overall_att < 80 else "On track",
+            "detail": f"Overall recorded attendance is {overall_att:.1f}%.",
+        })
+    if upcoming_soon:
+        prep_date = _student_parse_date(upcoming_soon[1])
+        days_left = max(0, (prep_date - today_value).days) if prep_date else None
+        signals.append({
+            "label": "Nearest exam",
+            "status": "Soon" if days_left is not None and days_left <= 7 else "Scheduled",
+            "detail": f"{upcoming_soon[0]} is on {upcoming_soon[1]}; {days_left} day(s) away." if days_left is not None else f"{upcoming_soon[0]} is scheduled for {upcoming_soon[1]}.",
+        })
+        signals.append({
+            "label": "Exam preparation",
+            "status": "Build plan" if prep_task_count < 2 else "Prepared",
+            "detail": f"{prep_task_count} open task(s) linked to the nearest exam subject.",
+        })
+    return signals
+
+
+def student_progress_snapshot(user_id):
+    subjects = int(cursor.execute("SELECT COUNT(*) FROM subjects WHERE user_id = ?", (user_id,)).fetchone()[0] or 0)
+    assignment_total = int(cursor.execute("SELECT COUNT(*) FROM assignments WHERE user_id = ?", (user_id,)).fetchone()[0] or 0)
+    assignment_done = int(cursor.execute("SELECT COUNT(*) FROM assignments WHERE user_id = ? AND status = 'Completed'", (user_id,)).fetchone()[0] or 0)
+    task_total = int(cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (user_id,)).fetchone()[0] or 0)
+    task_done = int(cursor.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND completed = 1", (user_id,)).fetchone()[0] or 0)
+    exams = int(cursor.execute("SELECT COUNT(*) FROM exams WHERE user_id = ?", (user_id,)).fetchone()[0] or 0)
+    documents = int(cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,)).fetchone()[0] or 0)
+    att_summaries, _, overall_att = student_attendance_summary(user_id)
+    focus_minutes = sum(int(item.get("minutes") or 0) for item in st.session_state.get("focus_sessions", []))
+    quiz_score = int(st.session_state.get("quiz_score", 0))
+    quiz_answered = int(st.session_state.get("quiz_answered", 0))
+    return {
+        "subjects": subjects,
+        "assignment_total": assignment_total,
+        "assignment_done": assignment_done,
+        "assignment_rate": (assignment_done / assignment_total * 100.0) if assignment_total else 0.0,
+        "task_total": task_total,
+        "task_done": task_done,
+        "task_rate": (task_done / task_total * 100.0) if task_total else 0.0,
+        "exams": exams,
+        "documents": documents,
+        "attendance": overall_att,
+        "focus_minutes": focus_minutes,
+        "quiz_score": quiz_score,
+        "quiz_answered": quiz_answered,
+    }
+
+
+def ics_escape(value):
+    return str(value or "").replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
+
+
+def student_calendar_events(user_id):
+    """Return assignments, exams and study tasks as simple calendar events."""
+    events = []
+    assignment_rows = cursor.execute(
+        "SELECT id, title, deadline, description FROM assignments WHERE user_id = ? AND deadline IS NOT NULL ORDER BY deadline LIMIT 100",
+        (user_id,),
+    ).fetchall()
+    for row in assignment_rows:
+        events.append({"uid": f"assignment-{user_id}-{row[0]}@studysphere", "date": str(row[2]), "title": f"Assignment: {row[1]}", "description": row[3] or "StudySphere assignment"})
+    exam_rows = cursor.execute(
+        "SELECT exams.id, exams.title, exams.exam_date, exams.exam_time, exams.room, subjects.name FROM exams LEFT JOIN subjects ON exams.subject_id = subjects.id WHERE exams.user_id = ? AND exams.exam_date IS NOT NULL ORDER BY exams.exam_date LIMIT 100",
+        (user_id,),
+    ).fetchall()
+    for row in exam_rows:
+        desc = f"Subject: {row[5] or 'General'}"
+        if row[4]:
+            desc += f"\\nRoom: {row[4]}"
+        events.append({"uid": f"exam-{user_id}-{row[0]}@studysphere", "date": str(row[2]), "time": str(row[3] or ""), "title": f"Exam: {row[1]}", "description": desc})
+    task_rows = cursor.execute(
+        "SELECT id, title, task_date, duration, priority FROM tasks WHERE user_id = ? AND task_date IS NOT NULL ORDER BY task_date LIMIT 100",
+        (user_id,),
+    ).fetchall()
+    for row in task_rows:
+        events.append({"uid": f"task-{user_id}-{row[0]}@studysphere", "date": str(row[2]), "title": f"Study task: {row[1]}", "description": f"Priority: {row[4] or 'Medium'}", "duration": int(row[3] or 30)})
+    return sorted(events, key=lambda item: (item.get("date", "9999-12-31"), item.get("title", "")))
+
+
+def build_student_ics(user_id):
+    """Build a calendar file that can be imported into Google Calendar, Outlook or Apple Calendar."""
+    from datetime import timedelta
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//StudySphere//Academic Calendar//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"]
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    for event in student_calendar_events(user_id):
+        event_date = _student_parse_date(event.get("date"))
+        if not event_date:
+            continue
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{event['uid']}",
+            f"DTSTAMP:{stamp}",
+            f"DTSTART;VALUE=DATE:{event_date.strftime('%Y%m%d')}",
+            f"DTEND;VALUE=DATE:{(event_date + timedelta(days=1)).strftime('%Y%m%d')}",
+            f"SUMMARY:{ics_escape(event.get('title'))}",
+            f"DESCRIPTION:{ics_escape(event.get('description'))}",
+            "END:VEVENT",
+        ])
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines).encode("utf-8")
+
+
+def google_calendar_template_url(title, event_date, description=""):
+    parsed = _student_parse_date(event_date)
+    if not parsed:
+        return ""
+    next_day = parsed.fromordinal(parsed.toordinal() + 1)
+    dates = f"{parsed.strftime('%Y%m%d')}/{next_day.strftime('%Y%m%d')}"
+    return "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + quote_plus(str(title)) + "&dates=" + dates + "&details=" + quote_plus(str(description))
+
+
+def integration_student_summary(user_id):
+    institution_id = str(INSTITUTION_ID or DEFAULT_INSTITUTION_ID)
+    active_integrations = cursor.execute(
+        "SELECT integration_type, name, updated_at FROM integration_configs WHERE institution_id = ? AND active = 1 ORDER BY name",
+        (institution_id,),
+    ).fetchall()
+    courses = authorized_institution_courses(user_id)
+    latest_runs = cursor.execute(
+        "SELECT ic.name, isr.status, isr.finished_at, isr.message FROM integration_sync_runs isr JOIN integration_configs ic ON ic.id = isr.integration_id WHERE ic.institution_id = ? ORDER BY isr.started_at DESC LIMIT 5",
+        (institution_id,),
+    ).fetchall()
+    return active_integrations, courses, latest_runs
+
+
 # ============================================================
 # CREATOR / ADMIN CONFIGURATION
 # ============================================================
@@ -2669,6 +2975,24 @@ body div[data-baseweb="popover"] > div {
   border-color:var(--ss-border) !important;
 }
 
+
+/* Accessibility + student productivity UI */
+*:focus-visible { outline:3px solid var(--ss-accent) !important; outline-offset:3px !important; }
+.external-action { display:block; padding:12px 15px; margin-top:12px; border-radius:12px; text-decoration:none !important; background:var(--ss-primary); color:#fff !important; font-weight:850; border:1px solid var(--ss-primary-hover); text-align:center; }
+.notification-row { display:flex; align-items:center; gap:11px; padding:11px 13px; margin:8px 0; border:1px solid var(--ss-border); background:var(--ss-surface); border-radius:14px; box-shadow:0 8px 20px rgba(15,23,42,.035); }
+.notification-icon { width:35px; height:35px; display:flex; align-items:center; justify-content:center; flex-shrink:0; border-radius:11px; background:var(--ss-primary-soft); }
+.notification-title { color:var(--ss-text) !important; font-size:11px; font-weight:900; }
+.notification-text { color:var(--ss-muted) !important; font-size:9px; margin-top:2px; line-height:1.5; }
+.notification-date { margin-left:auto; color:var(--ss-muted) !important; font-size:8px; white-space:nowrap; }
+.signal-card { min-height:135px; }
+.signal-status, .insight-status { display:inline-flex; margin-top:8px; padding:4px 8px; border-radius:999px; border:1px solid var(--ss-border); background:var(--ss-primary-soft); color:var(--ss-primary) !important; font-size:8px; font-weight:900; }
+.insight-card { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:9px 0; padding:16px 18px; border:1px solid var(--ss-border); border-radius:16px; background:var(--ss-surface); box-shadow:0 9px 24px rgba(15,23,42,.035); }
+.progress-profile-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px; }
+.command-center { margin:22px 0 10px; padding:15px 17px; border:1px solid rgba(56,189,248,.28); border-radius:16px; background:linear-gradient(135deg,var(--ss-surface),var(--ss-accent-soft)); }
+.command-center-title { color:var(--ss-text) !important; font-size:13px; font-weight:900; }
+.command-center-sub { color:var(--ss-muted) !important; font-size:9px; line-height:1.55; margin-top:3px; }
+@media (max-width:700px) { .progress-profile-grid { grid-template-columns:1fr; } .notification-row { align-items:flex-start; } .notification-date { display:none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; scroll-behavior:auto !important; } }
 
 </style>
 """.replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#0B1F3A" if not dark_mode else "#163A63").replace("__PRIMARY_HOVER__", "#123D6A" if not dark_mode else "#1D4F80").replace("__PRIMARY_SOFT__", "rgba(11,31,58,.10)" if not dark_mode else "rgba(56,189,248,.14)").replace("__ACCENT__", "#38BDF8" if not dark_mode else "#38BDF8").replace("__ACCENT_SOFT__", "rgba(56,189,248,.12)" if not dark_mode else "rgba(56,189,248,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
@@ -6506,6 +6830,10 @@ if st.session_state.user_role == "student":
     nav_options.append((25, "📈  Grades & GPA"))
     nav_options.append((26, "🗂️  Flashcards & Quiz"))
     nav_options.append((27, "🎯  Focus Mode"))
+    nav_options.append((28, "🔔  Notifications & Calendar"))
+    nav_options.append((29, "🧭  Academic Insights"))
+    nav_options.append((30, "📈  My Progress"))
+    nav_options.append((31, "🔗  LMS & Study Sync"))
 if has_permission("manage_university"):
     nav_options.append((22, "💰  Student Fees"))
     nav_options.append((17, "🔗  Integration Center"))
@@ -6549,7 +6877,7 @@ if st.session_state.page == 20 and st.session_state.user_role != "student":
 if st.session_state.page == 21 and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
-for _student_only_page in (24, 25, 26, 27):
+for _student_only_page in (24, 25, 26, 27, 28, 29, 30, 31):
     if st.session_state.page == _student_only_page and st.session_state.user_role != "student":
         st.session_state.page = 1
         st.rerun()
@@ -6893,6 +7221,29 @@ if st.session_state.page == 1:
     st.markdown(uni_exam_html, unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
+    # Transparent academic attention snapshot.
+    dashboard_signals = academic_attention_signals(AUTH_ID)
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Academic attention snapshot</div><div class="section-sub">Clear signals based only on your stored assignments, tasks, attendance and exams.</div></div></div><div class="dashboard-grid-3">', unsafe_allow_html=True)
+    for signal in dashboard_signals[:3]:
+        st.markdown(f'<div class="focus-card signal-card"><div class="panel-title">{signal["label"]}</div><div class="signal-status">{signal["status"]}</div><div class="panel-sub">{signal["detail"]}</div></div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    notifications_preview = student_notification_items(AUTH_ID)[:4]
+    st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">🔔 Next notifications</div><div class="section-sub">The most relevant reminders currently detected in your account.</div></div></div>', unsafe_allow_html=True)
+    if notifications_preview:
+        for item in notifications_preview:
+            st.markdown(f'<div class="notification-row"><div class="notification-icon">{item["icon"]}</div><div><div class="notification-title">{item["title"]}</div><div class="notification-text">{item["text"]}</div></div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dashboard-empty">No active academic notifications right now.</div>', unsafe_allow_html=True)
+    notify_cols = st.columns(2)
+    if notify_cols[0].button("🔔 Open Notifications", key="dashboard_notifications", use_container_width=True):
+        st.session_state.page = 28
+        st.rerun()
+    if notify_cols[1].button("📈 Open My Progress", key="dashboard_progress", use_container_width=True):
+        st.session_state.page = 30
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown('<div class="ai-cta"><div class="ai-cta-copy"><div class="ai-cta-title">🤖 StudySphere AI is ready</div><div class="ai-cta-sub">Ask naturally, let the agent inspect your records and notes, or ask it to perform StudySphere actions such as creating and updating academic records.</div></div><div class="ai-cta-badge">Agentic • Gemini powered</div></div>', unsafe_allow_html=True)
     open_ai = st.button("Open AI Agent", key="dashboard_open_ai", use_container_width=True)
     if open_ai:
@@ -7131,6 +7482,18 @@ elif st.session_state.page == 6:
                 st.success("Document removed from your knowledge base.")
                 st.rerun()
 
+    kb1, kb2, kb3 = st.columns(3)
+    if kb1.button("🤖 Ask Agent about my notes", key="kb_ask_agent", use_container_width=True):
+        st.session_state.page = 8
+        st.session_state.agent_command_text = "Search my uploaded notes and explain the most important topics I should revise."
+        st.rerun()
+    if kb2.button("🗂️ Build flashcards", key="kb_flashcards", use_container_width=True):
+        st.session_state.page = 26
+        st.rerun()
+    if kb3.button("🧠 Open Exam Preparation", key="kb_exam_prep", use_container_width=True):
+        st.session_state.page = 24
+        st.rerun()
+
     st.markdown('<div class="ai-panel"><div class="ai-badge">Agent tools + RAG</div><div class="ai-title">🧠 StudySphere Agent can retrieve and act</div><div class="ai-text">The Agent can search your uploaded documents and authorized university material, inspect your academic records, and execute safe StudySphere actions such as creating subjects, exams, assignments, and study tasks when you explicitly ask.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 7:
@@ -7219,6 +7582,34 @@ elif st.session_state.page == 8:
         avatar = "🧑‍🎓" if role == "user" else "🤖"
         with st.chat_message("user" if role == "user" else "assistant", avatar=avatar):
             st.markdown(content)
+
+    st.markdown('<div class="command-center"><div class="command-center-title">⚡ Agent Command Center</div><div class="command-center-sub">Give one high-level instruction and let the Agent inspect your records, use authorized tools, and perform the requested StudySphere actions.</div></div>', unsafe_allow_html=True)
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    quick_prompts = {
+        "📅 Plan my week": "Build my study plan for the next 7 days using my exams, assignments and open study tasks.",
+        "🎯 Prepare for exam": "Inspect my nearest upcoming exam and create the most useful StudySphere preparation tasks without inventing dates.",
+        "🧹 Organize workload": "Review my open academic workload and tell me which tasks need attention first, then create study tasks where useful.",
+        "📝 Check progress": "Inspect my academic records and summarize what I have completed, what remains, and the next three actions I should take.",
+    }
+    for col, (label, prompt_value) in zip((cc1, cc2, cc3, cc4), quick_prompts.items()):
+        if col.button(label, key=f"agent_quick_{label}", use_container_width=True):
+            st.session_state.agent_command_text = prompt_value
+            st.rerun()
+    agent_command_text = st.text_area("Command", key="agent_command_text", height=80, placeholder="Example: Organize my week around my exam Friday and my two unfinished assignments.")
+    if st.button("▶ Run Agent Command", key="run_agent_command", use_container_width=True) and agent_command_text.strip():
+        prompt_text = agent_command_text.strip()
+        save_chat_message(active_chat_id, AUTH_ID, "user", prompt_text)
+        if not chat_rows:
+            update_chat_title(active_chat_id, AUTH_ID, prompt_text)
+        refreshed_rows = load_chat_messages(active_chat_id, AUTH_ID)
+        academic_context = academic_context_for_chat(AUTH_ID, "")
+        with st.chat_message("assistant", avatar="🤖"):
+            streamed_answer = st.write_stream(stream_studysphere_agent(GLOBAL_GEMINI_API_KEY, active_chat_id, AUTH_ID, refreshed_rows, academic_context, prompt_text))
+        answer_text = streamed_answer if isinstance(streamed_answer, str) else str(streamed_answer)
+        answer_text = answer_text.strip() or "I could not generate a response. Please try again."
+        save_chat_message(active_chat_id, AUTH_ID, "assistant", answer_text)
+        st.session_state.agent_command_text = ""
+        st.rerun()
 
     chat_prompt = st.chat_input("Message StudySphere AI…")
     if chat_prompt:
@@ -7762,6 +8153,11 @@ elif st.session_state.page == 20 and st.session_state.user_role == "student":
             st.dataframe([{"Date": item['date'], "Topic": item['topic'] or "—", "Status": item['status']} for item in recent_for_selected], use_container_width=True, hide_index=True)
         else:
             st.info("No marked sessions are available for this class yet.")
+    if attendance_summaries:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🧭 Attendance intelligence</div><div class="panel-sub">These calculations use only your recorded sessions and an 80% reference point. They are estimates, not guarantees about university policy.</div></div>', unsafe_allow_html=True)
+        for insight in attendance_intelligence(attendance_summaries):
+            st.markdown(f'<div class="notification-row"><div class="notification-icon">{"🟢" if insight["status"] == "On track" else "🟡"}</div><div><div class="notification-title">{insight["course"]} • {insight["class"]} — {insight["percentage"]:.1f}%</div><div class="notification-text">{insight["detail"]}</div></div></div>', unsafe_allow_html=True)
+
     st.markdown('<div class="ai-panel"><div class="ai-badge">Private student record</div><div class="ai-title">🔐 Attendance is linked to your registered classes</div><div class="ai-text">You can see only attendance records associated with your StudySphere account. Faculty manage attendance for their assigned classes.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 12 and st.session_state.user_role in {"faculty", "university_admin", "creator"}:
@@ -9663,6 +10059,90 @@ elif st.session_state.page == 27:
         st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">📊 Focus history</div><div class="panel-sub">Current session history for this browser session.</div></div>', unsafe_allow_html=True)
         st.metric("Total focused minutes", total_focus_minutes)
         st.dataframe(sessions[::-1], use_container_width=True, hide_index=True)
+
+
+elif st.session_state.page == 28:
+    st.markdown('<div class="page-banner"><div class="page-title">🔔 Notifications & Calendar</div><div class="page-sub">Keep deadlines, exams, attendance signals and your study schedule in one place.</div></div>', unsafe_allow_html=True)
+    notifications = student_notification_items(AUTH_ID)
+    n1, n2 = st.columns(2)
+    n1.metric("Active reminders", len(notifications))
+    upcoming_event_count = len(student_calendar_events(AUTH_ID))
+    n2.metric("Calendar items", upcoming_event_count)
+    if notifications:
+        for item in notifications:
+            st.markdown(f'<div class="notification-row"><div class="notification-icon">{item["icon"]}</div><div><div class="notification-title">{item["title"]}</div><div class="notification-text">{item["text"]}</div></div><div class="notification-date">{item.get("date", "")}</div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="panel"><div class="panel-title">🎉 You are clear</div><div class="panel-sub">No current assignment, exam, attendance or fee reminders were detected.</div></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">📆 Calendar integration</div><div class="panel-sub">Download an iCalendar file and import it into Google Calendar, Outlook or Apple Calendar. You can also open a one-click Google Calendar template for individual events.</div></div>', unsafe_allow_html=True)
+    cal_events = student_calendar_events(AUTH_ID)
+    if cal_events:
+        st.download_button("📥 Download StudySphere calendar (.ics)", data=build_student_ics(AUTH_ID), file_name="studysphere_academic_calendar.ics", mime="text/calendar", use_container_width=True, key="download_student_ics")
+        cal_labels = [f"{event['date']} • {event['title']}" for event in cal_events[:50]]
+        selected_cal = st.selectbox("Google Calendar event", cal_labels, key="google_calendar_event_selector")
+        event = cal_events[cal_labels.index(selected_cal)]
+        google_url = google_calendar_template_url(event["title"], event["date"], event.get("description", ""))
+        if google_url:
+            st.markdown(f'<a class="external-action" href="{google_url}" target="_blank" rel="noopener noreferrer">➜ Open selected event in Google Calendar</a>', unsafe_allow_html=True)
+    else:
+        st.info("Add assignments, exams or study tasks to create calendar events.")
+
+elif st.session_state.page == 29:
+    st.markdown('<div class="page-banner"><div class="page-title">🧭 Academic Insights</div><div class="page-sub">Transparent signals to help you decide what deserves attention next.</div></div>', unsafe_allow_html=True)
+    signals = academic_attention_signals(AUTH_ID)
+    for signal in signals:
+        st.markdown(f'<div class="insight-card"><div><div class="panel-title">{signal["label"]}</div><div class="panel-sub">{signal["detail"]}</div></div><div class="insight-status">{signal["status"]}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">How these signals work</div><div class="panel-sub">StudySphere does not hide a score behind the labels. Each signal is derived from a specific stored count or calculation, such as overdue assignments, open tasks, recorded attendance, or days until the nearest exam.</div></div>', unsafe_allow_html=True)
+    a1, a2, a3 = st.columns(3)
+    if a1.button("🧠 Exam Preparation", key="insights_exam_prep", use_container_width=True):
+        st.session_state.page = 24; st.rerun()
+    if a2.button("🎯 Focus Mode", key="insights_focus", use_container_width=True):
+        st.session_state.page = 27; st.rerun()
+    if a3.button("📈 My Progress", key="insights_progress", use_container_width=True):
+        st.session_state.page = 30; st.rerun()
+
+elif st.session_state.page == 30:
+    st.markdown('<div class="page-banner"><div class="page-title">📈 My Progress</div><div class="page-sub">A personal academic snapshot built from your StudySphere activity.</div></div>', unsafe_allow_html=True)
+    progress = student_progress_snapshot(AUTH_ID)
+    cols = st.columns(4)
+    cols[0].metric("Subjects", progress["subjects"])
+    cols[1].metric("Assignments complete", f'{progress["assignment_done"]}/{progress["assignment_total"]}')
+    cols[2].metric("Study tasks complete", f'{progress["task_done"]}/{progress["task_total"]}')
+    cols[3].metric("Documents", progress["documents"])
+    st.markdown('<div class="progress-profile-grid">', unsafe_allow_html=True)
+    st.markdown(f'<div class="progress-card"><div class="panel-title">📝 Assignment completion</div><div class="mini-bar"><div class="mini-fill" style="width:{progress["assignment_rate"]}%;"></div></div><div class="progress-heading" style="margin-top:8px;">{progress["assignment_rate"]:.1f}%</div><div class="progress-copy">Completed assignments divided by all saved assignments.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="progress-card"><div class="panel-title">✅ Study task completion</div><div class="mini-bar"><div class="mini-fill" style="width:{progress["task_rate"]}%;"></div></div><div class="progress-heading" style="margin-top:8px;">{progress["task_rate"]:.1f}%</div><div class="progress-copy">Completed study tasks divided by all saved tasks.</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Attendance", f'{progress["attendance"]:.1f}%' if progress["attendance"] is not None else "—")
+    p2.metric("Focus minutes", progress["focus_minutes"])
+    p3.metric("Quiz accuracy", f'{(progress["quiz_score"] / progress["quiz_answered"] * 100.0):.1f}%' if progress["quiz_answered"] else "—")
+    csv_data = io.StringIO()
+    writer = csv.writer(csv_data)
+    writer.writerow(["Metric", "Value"])
+    writer.writerows([
+        ["Subjects", progress["subjects"]], ["Assignments complete", f'{progress["assignment_done"]}/{progress["assignment_total"]}'], ["Assignment completion %", f'{progress["assignment_rate"]:.1f}'], ["Study tasks complete", f'{progress["task_done"]}/{progress["task_total"]}'], ["Study task completion %", f'{progress["task_rate"]:.1f}'], ["Attendance %", "" if progress["attendance"] is None else f'{progress["attendance"]:.1f}'], ["Documents", progress["documents"]], ["Focus minutes", progress["focus_minutes"]], ["Quiz accuracy %", "" if not progress["quiz_answered"] else f'{progress["quiz_score"] / progress["quiz_answered"] * 100.0:.1f}']
+    ])
+    st.download_button("📥 Export my progress (CSV)", data=csv_data.getvalue().encode("utf-8"), file_name="studysphere_progress.csv", mime="text/csv", use_container_width=True, key="export_student_progress")
+
+elif st.session_state.page == 31:
+    st.markdown('<div class="page-banner"><div class="page-title">🔗 LMS & Study Sync</div><div class="page-sub">See the university systems connected to StudySphere and the course information currently available to your account.</div></div>', unsafe_allow_html=True)
+    active_integrations, courses, latest_runs = integration_student_summary(AUTH_ID)
+    l1, l2 = st.columns(2)
+    l1.metric("Authorized courses", len(courses))
+    l2.metric("Active integrations", len(active_integrations))
+    if active_integrations:
+        st.markdown('<div class="panel"><div class="panel-title">🏫 Connected systems</div><div class="panel-sub">Connection setup and credentials remain controlled by your university administrator.</div></div>', unsafe_allow_html=True)
+        st.dataframe([{"System": row[1], "Type": row[0], "Updated": row[2] or "—"} for row in active_integrations], use_container_width=True, hide_index=True)
+    else:
+        st.markdown('<div class="panel"><div class="panel-title">🔗 No LMS/SIS connection is active</div><div class="panel-sub">Your StudySphere account can still use manually stored subjects, assignments, exams and documents. A university administrator can configure OneRoster/LTI or another supported integration.</div></div>', unsafe_allow_html=True)
+    if courses:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">📚 Authorized course feed</div><div class="panel-sub">Only courses your account is authorized to access are shown.</div></div>', unsafe_allow_html=True)
+        st.dataframe([{"Course": row[1], "Code": row[2] or "—", "Department": row[3] or "—", "Semester": row[4] or "—", "Credits": row[5] or "—"} for row in courses], use_container_width=True, hide_index=True)
+    if latest_runs:
+        st.markdown('<div class="panel" style="margin-top:18px;"><div class="panel-title">🔄 Recent synchronization</div><div class="panel-sub">Latest university-managed integration runs.</div></div>', unsafe_allow_html=True)
+        st.dataframe([{"Integration": row[0], "Status": row[1], "Finished": row[2] or "—", "Message": row[3] or ""} for row in latest_runs], use_container_width=True, hide_index=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Institutional interoperability</div><div class="ai-title">StudySphere stays inside your authorized academic scope</div><div class="ai-text">University integrations can feed courses, sections, enrollments and published academic information into StudySphere. The student view only exposes records authorized for the signed-in account.</div></div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 23:
     st.markdown('<div class="page-banner"><div class="page-title">🖼️ Image Compressor</div><div class="page-sub">Reduce image file size for assignments, uploads, websites, and social posts — directly inside StudySphere.</div></div>', unsafe_allow_html=True)
