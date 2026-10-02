@@ -2809,17 +2809,18 @@ input, textarea,
 
 
 # ============================================================
-# PREMIUM WORKSPACE NAVIGATION — animated button-style controls
+# PREMIUM WORKSPACE NAVIGATION — sequential outlined buttons
 # ============================================================
 st.markdown(
     """
 <style>
-/* Turn the Workspace radio navigation into polished, button-like controls. */
+/* Workspace is presented as a clean, sequential button stack rather than a bullet list. */
 [data-testid="stSidebar"] [role="radiogroup"] {
   display:flex !important;
   flex-direction:column !important;
-  gap:8px !important;
-  margin-top:4px !important;
+  gap:9px !important;
+  margin:8px 0 4px !important;
+  padding:2px !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label {
@@ -2827,24 +2828,26 @@ st.markdown(
   display:flex !important;
   align-items:center !important;
   width:100% !important;
-  min-height:44px !important;
+  min-height:46px !important;
   box-sizing:border-box !important;
   margin:0 !important;
-  padding:9px 12px !important;
-  border:1px solid var(--ss-border) !important;
-  border-radius:14px !important;
-  background:linear-gradient(145deg,var(--ss-surface),var(--ss-surface-2)) !important;
-  box-shadow:0 3px 10px rgba(15,23,42,.035) !important;
+  padding:8px 14px 8px 13px !important;
+  border:1.5px solid rgba(124,58,237,.22) !important;
+  border-radius:13px !important;
+  background:linear-gradient(180deg,var(--ss-surface),var(--ss-surface-2)) !important;
+  box-shadow:
+    0 2px 7px rgba(15,23,42,.035),
+    inset 0 0 0 1px rgba(255,255,255,.22) !important;
   overflow:hidden !important;
   cursor:pointer !important;
   transition:
-    transform .20s cubic-bezier(.2,.8,.2,1),
-    box-shadow .20s ease,
-    border-color .20s ease,
-    background .20s ease !important;
+    transform .18s ease,
+    border-color .18s ease,
+    box-shadow .18s ease,
+    background .18s ease !important;
 }
 
-/* Hide the radio bullet itself. */
+/* Remove the native radio bullet. */
 [data-testid="stSidebar"] [role="radiogroup"] label input,
 [data-testid="stSidebar"] [role="radiogroup"] [role="radio"] {
   opacity:0 !important;
@@ -2855,33 +2858,50 @@ st.markdown(
   position:absolute !important;
 }
 
-/* Sliding highlight creates a subtle premium animation on hover. */
+/* Number badge gives every Workspace item a clear visual sequence. */
+[data-testid="stSidebar"] [role="radiogroup"] label p,
+[data-testid="stSidebar"] [role="radiogroup"] label span {
+  position:relative !important;
+  z-index:3 !important;
+  margin:0 !important;
+  color:var(--ss-text) !important;
+  font-size:12px !important;
+  font-weight:760 !important;
+  line-height:1.25 !important;
+  letter-spacing:.05px !important;
+  white-space:nowrap !important;
+  transition:color .18s ease, transform .18s ease !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label p::first-letter {
+  font-weight:900 !important;
+}
+
+/* Elegant moving shine across each outlined button. */
 [data-testid="stSidebar"] [role="radiogroup"] label::before {
   content:"" !important;
   position:absolute !important;
-  top:-35% !important;
-  left:-42% !important;
-  width:34% !important;
-  height:170% !important;
-  background:linear-gradient(
-    90deg,
-    transparent,
-    rgba(255,255,255,.22),
-    transparent
-  ) !important;
+  top:-45% !important;
+  left:-70% !important;
+  width:42% !important;
+  height:190% !important;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.24),transparent) !important;
   transform:skewX(-22deg) !important;
-  transition:left .65s ease !important;
+  transition:left .6s ease !important;
   pointer-events:none !important;
+  z-index:1 !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label:hover::before {
-  left:118% !important;
+  left:130% !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
-  transform:translateX(4px) !important;
-  border-color:rgba(124,58,237,.32) !important;
-  box-shadow:0 8px 18px rgba(76,29,149,.10) !important;
+  transform:translateX(3px) !important;
+  border-color:rgba(124,58,237,.52) !important;
+  box-shadow:
+    0 7px 18px rgba(76,29,149,.10),
+    inset 0 0 0 1px rgba(124,58,237,.08) !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label:active {
@@ -2892,68 +2912,48 @@ st.markdown(
   width:100% !important;
 }
 
-[data-testid="stSidebar"] [role="radiogroup"] label p,
-[data-testid="stSidebar"] [role="radiogroup"] label span {
-  position:relative !important;
-  z-index:2 !important;
-  margin:0 !important;
-  color:var(--ss-text) !important;
-  font-size:12px !important;
-  font-weight:750 !important;
-  line-height:1.25 !important;
-  transition:color .20s ease, transform .20s ease !important;
-}
-
-[data-testid="stSidebar"] [role="radiogroup"] label:hover p,
-[data-testid="stSidebar"] [role="radiogroup"] label:hover span {
-  transform:translateX(2px) !important;
-}
-
-/* Active workspace item: stronger contrast + moving accent line. */
+/* Selected button gets a clean outline and a compact active marker. */
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
-  background:linear-gradient(135deg,rgba(124,58,237,.14),rgba(37,99,235,.08)) !important;
-  border-color:rgba(124,58,237,.40) !important;
+  background:linear-gradient(135deg,rgba(124,58,237,.13),rgba(37,99,235,.07)) !important;
+  border-color:var(--ss-primary) !important;
   box-shadow:
     inset 4px 0 0 var(--ss-primary),
-    0 10px 24px rgba(76,29,149,.12) !important;
-  transform:translateX(3px) !important;
-  animation:ssWorkspaceActive .55s ease-out !important;
+    0 8px 20px rgba(76,29,149,.12) !important;
+  transform:translateX(2px) !important;
+  animation:ssWorkspaceSelected .35s ease-out !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span {
   color:var(--ss-primary) !important;
-  font-weight:850 !important;
+  font-weight:860 !important;
+  transform:translateX(2px) !important;
 }
 
+/* Active indicator at the right edge. */
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {
-  content:"›" !important;
+  content:"→" !important;
   position:absolute !important;
   right:12px !important;
   top:50% !important;
-  transform:translateY(-50%) translateX(0) !important;
+  transform:translateY(-50%) !important;
   color:var(--ss-primary) !important;
-  font-size:19px !important;
+  font-size:15px !important;
   font-weight:900 !important;
   line-height:1 !important;
-  opacity:.92 !important;
-  z-index:2 !important;
-  animation:ssWorkspaceArrow 1.15s ease-in-out infinite !important;
+  opacity:.95 !important;
+  z-index:4 !important;
+  animation:ssWorkspaceArrow 1.1s ease-in-out infinite !important;
 }
 
-@keyframes ssWorkspaceActive {
-  0% { transform:translateX(0) scale(.985); opacity:.72; }
-  100% { transform:translateX(3px) scale(1); opacity:1; }
+@keyframes ssWorkspaceSelected {
+  0% { transform:translateX(0) scale(.985); opacity:.76; }
+  100% { transform:translateX(2px) scale(1); opacity:1; }
 }
 
 @keyframes ssWorkspaceArrow {
   0%,100% { transform:translateY(-50%) translateX(0); }
   50% { transform:translateY(-50%) translateX(3px); }
-}
-
-/* Slightly tighter labels around the animated button stack. */
-[data-testid="stSidebar"] .sidebar-label + [data-testid="stVerticalBlock"] {
-  margin-top:2px !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6436,9 +6436,15 @@ if has_permission("manage_faculty_courses"):
     nav_options.append((15, "🧠  Faculty AI"))
 if has_permission("manage_university"):
     nav_options.append((13, "🏫  University Admin"))
-nav_labels = [item[1] for item in nav_options]
-selected_label = st.sidebar.radio("Navigation", nav_labels, index=[x[0] for x in nav_options].index(st.session_state.page), label_visibility="collapsed")
-st.session_state.page = dict((label, page_id) for page_id, label in nav_options)[selected_label]
+nav_labels = [f"{index:02d}  {label}" for index, (_, label) in enumerate(nav_options, start=1)]
+nav_page_ids = [page_id for page_id, _ in nav_options]
+selected_label = st.sidebar.radio(
+    "Navigation",
+    nav_labels,
+    index=nav_page_ids.index(st.session_state.page),
+    label_visibility="collapsed",
+)
+st.session_state.page = nav_page_ids[nav_labels.index(selected_label)]
 if st.session_state.page == 11 and not has_permission("manage_users"):
     st.session_state.page = 1
     st.rerun()
