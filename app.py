@@ -2661,6 +2661,28 @@ control_accent_hover = "#A78BFA" if st.session_state.dark_mode else "#6D28D9"
 st.markdown(
     f"""
 <style>
+/* ===== StudySphere sidebar arrow contrast ===== */
+[data-testid="stSidebarCollapseButton"] button svg,
+[data-testid="stSidebarCollapseButton"] button svg path,
+[data-testid="stSidebarCollapsedControl"] button svg,
+[data-testid="stSidebarCollapsedControl"] button svg path {
+  color:{control_accent} !important;
+  fill:{control_accent} !important;
+  stroke:{control_accent} !important;
+}
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarCollapsedControl"] button {
+  color:{control_accent} !important;
+}
+[data-testid="stSidebarCollapseButton"] button:hover svg,
+[data-testid="stSidebarCollapseButton"] button:hover svg path,
+[data-testid="stSidebarCollapsedControl"] button:hover svg,
+[data-testid="stSidebarCollapsedControl"] button:hover svg path {
+  color:{control_accent_hover} !important;
+  fill:{control_accent_hover} !important;
+  stroke:{control_accent_hover} !important;
+}
+
 /* ===== StudySphere global dark-mode controls ===== */
 .stButton > button,
 button[kind="primary"],
