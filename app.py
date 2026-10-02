@@ -515,6 +515,16 @@ cursor.execute("CREATE TABLE IF NOT EXISTS learning_attempts (id TEXT PRIMARY KE
 cursor.execute("CREATE TABLE IF NOT EXISTS student_ai_preferences (user_id TEXT PRIMARY KEY, allow_profile INTEGER NOT NULL DEFAULT 1, allow_academic INTEGER NOT NULL DEFAULT 1, allow_documents INTEGER NOT NULL DEFAULT 1, allow_learning_history INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)")
 
 # ============================================================
+# ADVANCED STUDENT WORKSPACES
+# ============================================================
+cursor.execute("CREATE TABLE IF NOT EXISTS syllabus_topics (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, subject_id INTEGER, topic TEXT NOT NULL, topic_order INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'Not started', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS research_projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, research_question TEXT NOT NULL, notes TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS research_sources (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL, title TEXT NOT NULL, url TEXT DEFAULT '', notes TEXT DEFAULT '', created_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS fyp_projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, problem_statement TEXT DEFAULT '', supervisor TEXT DEFAULT '', target_date TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+cursor.execute("CREATE TABLE IF NOT EXISTS fyp_milestones (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL, title TEXT NOT NULL, due_date TEXT, status TEXT NOT NULL DEFAULT 'Not started', notes TEXT DEFAULT '', position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+conn.commit()
+
+# ============================================================
 # INTEGRATION FOUNDATION (STEP 9)
 # ============================================================
 # The integration layer is deliberately additive: existing StudySphere
@@ -7098,6 +7108,78 @@ def multimodal_tutor_context(user_id):
     return "\n".join(parts)
 
 
+
+# ============================================================
+# ADVANCED STUDENT HELPER FUNCTIONS
+# ============================================================
+def _advanced_id(prefix):
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+def _clean_multiline(value, max_len=20000):
+    return str(value or '').replace('\r\n','\n').replace('\r','\n').strip()[:max_len]
+
+def _split_syllabus_topics(text_value):
+    raw=_clean_multiline(text_value)
+    parts=[p.strip(' \t•-*') for p in re.split(r"\n+|;|(?<=\.)\s{2,}",raw) if p.strip(' \t•-*')]
+    out=[]; seen=set()
+    for part in parts:
+        item=re.sub(r'\s+',' ',part).strip(); key=item.casefold()
+        if item and key not in seen: seen.add(key); out.append(item)
+    return out[:100]
+
+def save_syllabus_topics(user_id,subject_id,topic_text):
+    topics=_split_syllabus_topics(topic_text)
+    if not topics: return 0
+    now=datetime.now().isoformat(timespec='seconds')
+    cursor.execute('DELETE FROM syllabus_topics WHERE user_id = ? AND subject_id = ?', (str(user_id),subject_id))
+    for i,topic in enumerate(topics):
+        cursor.execute('INSERT INTO syllabus_topics (id,user_id,subject_id,topic,topic_order,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',(_advanced_id('syllabus'),str(user_id),subject_id,topic,i,'Not started',now,now))
+    conn.commit(); return len(topics)
+
+def load_syllabus_topics(user_id,subject_id):
+    return cursor.execute('SELECT id,topic,status,topic_order,updated_at FROM syllabus_topics WHERE user_id = ? AND subject_id = ? ORDER BY topic_order,topic',(str(user_id),subject_id)).fetchall()
+
+def update_syllabus_topic_status(user_id,topic_id,status):
+    cursor.execute('UPDATE syllabus_topics SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?',(str(status),datetime.now().isoformat(timespec='seconds'),str(topic_id),str(user_id))); conn.commit()
+
+def ensure_fyp_project(user_id,title,problem_statement='',supervisor='',target_date=None):
+    project_id=_advanced_id('fyp'); now=datetime.now().isoformat(timespec='seconds')
+    cursor.execute('INSERT INTO fyp_projects (id,user_id,title,problem_statement,supervisor,target_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',(project_id,str(user_id),_clean_multiline(title,180),_clean_multiline(problem_statement,4000),_clean_multiline(supervisor,180),str(target_date or ''),now,now)); conn.commit(); return project_id
+
+def create_fyp_milestone(user_id,project_id,title,due_date=None,status='Not started',notes=''):
+    row=cursor.execute('SELECT COALESCE(MAX(position),-1) FROM fyp_milestones WHERE project_id = ? AND user_id = ?',(str(project_id),str(user_id))).fetchone(); pos=int(row[0] or -1)+1 if row else 0
+    mid=_advanced_id('fypm'); now=datetime.now().isoformat(timespec='seconds')
+    cursor.execute('INSERT INTO fyp_milestones (id,project_id,user_id,title,due_date,status,notes,position,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',(mid,str(project_id),str(user_id),_clean_multiline(title,220),str(due_date or ''),str(status),_clean_multiline(notes,2000),pos,now,now)); conn.commit(); return mid
+
+def analyze_code(language,code_text):
+    import ast
+    code=str(code_text or '')
+    if not code.strip(): return {'ok':False,'summary':'Enter some code first.','issues':['No code provided.'],'metrics':{}}
+    if language=='Python':
+        try: tree=ast.parse(code)
+        except SyntaxError as exc: return {'ok':False,'summary':f'Syntax error on line {exc.lineno or "?"}: {exc.msg}','issues':[str(exc)],'metrics':{}}
+        funcs=sum(isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) for n in ast.walk(tree)); loops=sum(isinstance(n,(ast.For,ast.While,ast.AsyncFor)) for n in ast.walk(tree)); branches=sum(isinstance(n,(ast.If,ast.Match,ast.Try)) for n in ast.walk(tree)); imports=sum(isinstance(n,(ast.Import,ast.ImportFrom)) for n in ast.walk(tree))
+        return {'ok':True,'summary':'Python syntax is valid.','issues':[],'metrics':{'lines':len(code.splitlines()),'functions':funcs,'imports':imports,'loops':loops,'decision_blocks':branches}}
+    issues=[]
+    for left,right in (('{','}'),('(',')'),('[',']')):
+        if code.count(left)!=code.count(right): issues.append(f'{left}{right} are unbalanced.')
+    low=language.lower()
+    if low in {'c++','java'} and 'main' not in code: issues.append('No main entry point was detected.')
+    if low=='sql' and not re.search(r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b',code,re.I): issues.append('No common SQL statement keyword was detected.')
+    return {'ok':not issues,'summary':'Basic structural checks passed.' if not issues else 'Basic structural checks found possible issues.','issues':issues,'metrics':{'lines':len(code.splitlines()),'characters':len(code)}}
+
+def build_research_prompt(project_title,research_question,source_rows,notes=''):
+    blocks=[f'[Source {i}] Title: {row[1]}\nURL: {row[2] or "Not provided"}\nNotes: {row[3] or "No notes supplied."}' for i,row in enumerate(source_rows,1)]
+    return ('You are the StudySphere Research Assistant. Use only the supplied research question, notes, and sources. Do not invent citations, facts, statistics, or quotations. If evidence is insufficient, say so. Produce research scope, key findings, source comparison, evidence gaps, next questions, and a source list.\n\n'+f'Project: {project_title}\nResearch question: {research_question}\nResearch notes: {notes or "None"}\n\n'+'\n\n'.join(blocks or ['No external sources have been saved yet.']))
+
+def make_student_cv_text(profile,projects='',certifications='',achievements='',contact=''):
+    name,email,university,degree,semester,career_goal,skills=profile
+    lines=[str(name or 'Student'),str(career_goal or 'Student / Graduate'),str(contact or email or ''),'','EDUCATION',f'{degree or "Degree not set"} • {university or "University not set"} • {semester or "Semester not set"}','','SKILLS',str(skills or 'Not listed')]
+    if projects.strip(): lines += ['','PROJECTS',projects.strip()]
+    if certifications.strip(): lines += ['','CERTIFICATIONS',certifications.strip()]
+    if achievements.strip(): lines += ['','ACHIEVEMENTS',achievements.strip()]
+    return '\n'.join(lines).strip()
+
 def student_learning_export_csv(user_id):
     output = io.StringIO()
     writer = csv.writer(output)
@@ -7178,6 +7260,12 @@ if st.session_state.user_role == "student":
     nav_options.append((33, "🧠  Adaptive Learning"))
     nav_options.append((34, "🔐  AI Privacy"))
     nav_options.append((35, "💼  Career & Skills Roadmap"))
+    nav_options.append((36, "🧾  Syllabus Intelligence"))
+    nav_options.append((37, "💻  Coding Lab"))
+    nav_options.append((38, "🔬  Research Workspace"))
+    nav_options.append((39, "🚀  FYP Project Manager"))
+    nav_options.append((40, "📄  AI CV & Portfolio"))
+    nav_options.append((41, "🎙️  Voice Study Mode"))
 if has_permission("manage_university"):
     nav_options.append((22, "💰  Student Fees"))
     nav_options.append((17, "🔗  Integration Center"))
@@ -7221,7 +7309,7 @@ if st.session_state.page == 20 and st.session_state.user_role != "student":
 if st.session_state.page == 21 and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
-if st.session_state.page in {32, 33, 34, 35} and st.session_state.user_role != "student":
+if st.session_state.page in {32, 33, 34, 35, 36, 37, 38, 39, 40, 41} and st.session_state.user_role != "student":
     st.session_state.page = 1
     st.rerun()
 for _student_only_page in (24, 25, 26, 27, 28, 29, 30, 31):
@@ -7294,6 +7382,24 @@ if st.session_state.user_role == "student":
         st.rerun()
     if st.sidebar.button("💼 Career Roadmap", key="career_roadmap_sidebar", use_container_width=True):
         st.session_state.page = 35
+        st.rerun()
+    if st.sidebar.button("🧾 Syllabus Intelligence", key="syllabus_intelligence_sidebar", use_container_width=True):
+        st.session_state.page = 36
+        st.rerun()
+    if st.sidebar.button("💻 Coding Lab", key="coding_lab_sidebar", use_container_width=True):
+        st.session_state.page = 37
+        st.rerun()
+    if st.sidebar.button("🔬 Research Workspace", key="research_workspace_sidebar", use_container_width=True):
+        st.session_state.page = 38
+        st.rerun()
+    if st.sidebar.button("🚀 FYP Project Manager", key="fyp_manager_sidebar", use_container_width=True):
+        st.session_state.page = 39
+        st.rerun()
+    if st.sidebar.button("📄 AI CV & Portfolio", key="ai_cv_portfolio_sidebar", use_container_width=True):
+        st.session_state.page = 40
+        st.rerun()
+    if st.sidebar.button("🎙️ Voice Study Mode", key="voice_study_sidebar", use_container_width=True):
+        st.session_state.page = 41
         st.rerun()
 if has_permission("manage_users"):
     st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
@@ -10529,7 +10635,7 @@ elif st.session_state.page == 32:
         if tutor_image:
             st.image(tutor_image, caption=tutor_image.name, use_container_width=True)
     with tutor_right:
-        tutor_mode = st.selectbox("What should the Tutor do?", ["Explain step by step", "Solve and explain", "Check my work", "Explain a diagram/chart", "Read and summarize", "Explain code screenshot"], key="multimodal_tutor_mode")
+        tutor_mode = st.selectbox("What should the Tutor do?", ["Explain step by step", "Solve and explain", "Check my work", "Explain a diagram/chart", "Read and summarize", "Explain code screenshot", "Teach me interactively", "Turn this into a mini quiz"], key="multimodal_tutor_mode")
         tutor_prompt = st.text_area("Your question", height=150, placeholder="Example: I got step 3 wrong. Show me exactly where my solution went wrong and then teach me the correct method.", key="multimodal_tutor_prompt")
         tutor_context = st.text_area("Optional context", height=90, placeholder="Example: This is from my Database Systems course.", key="multimodal_tutor_context")
         analyze_image = st.button("🧠 Analyze with StudySphere", key="multimodal_tutor_button", use_container_width=True)
@@ -10544,6 +10650,8 @@ elif st.session_state.page == 32:
                     "Explain a diagram/chart": "Explain the visible diagram or chart, including relationships, labels, and what a student should remember.",
                     "Read and summarize": "Read the visible material and produce a concise study summary with key points.",
                     "Explain code screenshot": "Read the visible code and explain what it does, then identify likely bugs or confusing sections.",
+                    "Teach me interactively": "Teach one concept at a time, ask a short understanding question, and adapt the next explanation for a beginner.",
+                    "Turn this into a mini quiz": "Turn the visible material into a short quiz with clear questions, correct answers, and brief explanations.",
                 }[tutor_mode]
                 combined_prompt = mode_instruction + "\n\n" + str(tutor_prompt or "")
                 with st.spinner("StudySphere is examining the image…"):
@@ -10772,6 +10880,247 @@ elif st.session_state.page == 23:
             st.rerun()
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Image tools</div><div class="ai-title">Fast local image compression</div><div class="ai-text">JPG and WEBP support quality-based compression. PNG is optimized losslessly; when Auto mode is used, StudySphere can switch to WEBP when that produces a smaller result. Transparent images are kept transparent in WEBP/PNG output.</div></div>', unsafe_allow_html=True)
+
+
+elif st.session_state.page == 36:
+    st.markdown('<div class="page-banner"><div class="page-title">🧾 Syllabus Intelligence</div><div class="page-sub">Turn a syllabus into a topic map and connected revision checklist.</div></div>', unsafe_allow_html=True)
+    subject_rows = cursor.execute('SELECT id, name, code FROM subjects WHERE user_id = ? ORDER BY name', (AUTH_ID,)).fetchall()
+    if not subject_rows:
+        st.info('Add a subject first, then build its syllabus map.')
+    else:
+        subject_labels = [f'{row[1]}{(" • " + str(row[2])) if row[2] else ""}' for row in subject_rows]
+        chosen_label = st.selectbox('Course', subject_labels, key='syllabus_course_selector')
+        chosen_subject = subject_rows[subject_labels.index(chosen_label)]
+        current_topics = load_syllabus_topics(AUTH_ID, chosen_subject[0])
+        with st.expander('➕ Build / replace syllabus map', expanded=not bool(current_topics)):
+            syllabus_input = st.text_area('Paste syllabus topics', height=180, placeholder='Unit 1: Database fundamentals\nUnit 2: ER modeling\nUnit 3: SQL\nUnit 4: Transactions', key='syllabus_input_text')
+            if st.button('🧠 Build syllabus map', key='build_syllabus_map', use_container_width=True):
+                count = save_syllabus_topics(AUTH_ID, chosen_subject[0], syllabus_input)
+                st.success(f'Created {count} syllabus topic(s).')
+                st.rerun()
+        current_topics = load_syllabus_topics(AUTH_ID, chosen_subject[0])
+        if current_topics:
+            total = len(current_topics)
+            mastered = sum(1 for row in current_topics if row[2] == 'Mastered')
+            reviewing = sum(1 for row in current_topics if row[2] == 'Reviewing')
+            c1, c2, c3 = st.columns(3)
+            c1.metric('Topics', total)
+            c2.metric('Mastered', mastered)
+            c3.metric('Reviewing', reviewing)
+            st.progress(mastered / max(1, total))
+            for index, row in enumerate(current_topics, start=1):
+                left, mid = st.columns([4, 1])
+                left.markdown(f'<div class="insight-card"><div style="min-width:34px;font-weight:900;color:var(--ss-primary);">{index:02d}</div><div><div class="panel-title">{row[1]}</div><div class="panel-sub">{row[2]}</div></div></div>', unsafe_allow_html=True)
+                status_options = ['Not started', 'Reviewing', 'Mastered']
+                status = mid.selectbox('Status', status_options, index=status_options.index(row[2]) if row[2] in status_options else 0, key=f'syllabus_status_{row[0]}', label_visibility='collapsed')
+                if status != row[2]:
+                    update_syllabus_topic_status(AUTH_ID, row[0], status)
+                    st.rerun()
+            if st.button('📅 Create revision tasks for unfinished topics', key='syllabus_create_tasks', use_container_width=True):
+                created = 0
+                for row in current_topics:
+                    if row[2] == 'Mastered':
+                        continue
+                    title = f'Revise: {row[1]}'
+                    duplicate = cursor.execute('SELECT 1 FROM tasks WHERE user_id = ? AND subject_id = ? AND title = ? LIMIT 1', (AUTH_ID, chosen_subject[0], title)).fetchone()
+                    if not duplicate:
+                        cursor.execute('INSERT INTO tasks (title, task_date, duration, priority, completed, subject_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)', (title, date.today().isoformat(), 45, 'High' if row[2] == 'Not started' else 'Medium', 0, chosen_subject[0], AUTH_ID))
+                        created += 1
+                conn.commit()
+                st.success(f'Created {created} revision task(s).')
+                st.rerun()
+        else:
+            st.info('No syllabus map exists for this course yet.')
+
+elif st.session_state.page == 37:
+    st.markdown('<div class="page-banner"><div class="page-title">💻 Coding Lab</div><div class="page-sub">Safe code analysis, structure checks, debugging guidance, and AI explanations.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ai-panel"><div class="ai-badge">Safe analysis</div><div class="ai-title">StudySphere does not execute arbitrary student code</div><div class="ai-text">Python is parsed locally. Other languages receive structural checks. This avoids executing untrusted code inside Streamlit.</div></div>', unsafe_allow_html=True)
+    language = st.selectbox('Language', ['Python', 'C++', 'Java', 'SQL'], key='coding_lab_language')
+    code = st.text_area('Code', height=350, placeholder='Paste your code here…', key='coding_lab_code')
+    a1, a2 = st.columns(2)
+    if a1.button('🔎 Analyze code', key='coding_lab_analyze', use_container_width=True):
+        st.session_state.coding_lab_result = analyze_code(language, code)
+    if a2.button('🤖 Explain with StudySphere AI', key='coding_lab_ai', use_container_width=True):
+        if not code.strip():
+            st.warning('Enter some code first.')
+        else:
+            prompt = f'You are a careful {language} coding tutor. Explain this code, identify likely bugs without claiming unexecuted code is correct, suggest improvements, and give a few test cases.\n\nCODE:\n{code[:18000]}'
+            with st.spinner('Analyzing code…'):
+                st.session_state.coding_lab_ai_result = call_gemini_agent(GLOBAL_GEMINI_API_KEY, prompt)
+    result = st.session_state.get('coding_lab_result')
+    if result:
+        st.markdown(f'<div class="panel"><div class="panel-title">{"PASS" if result["ok"] else "REVIEW"} • Static analysis</div><div class="panel-sub">{result["summary"]}</div></div>', unsafe_allow_html=True)
+        if result['metrics']:
+            st.dataframe([result['metrics']], use_container_width=True, hide_index=True)
+        for issue in result['issues']:
+            st.warning(issue)
+        if result['ok']:
+            st.success('No issues were found by the available static checks.')
+    if st.session_state.get('coding_lab_ai_result'):
+        st.markdown('<div class="section-kicker" style="margin-top:20px;">AI explanation</div>', unsafe_allow_html=True)
+        st.markdown(st.session_state.coding_lab_ai_result)
+    if code.strip():
+        ext = {'Python': 'py', 'C++': 'cpp', 'Java': 'java', 'SQL': 'sql'}[language]
+        st.download_button('⬇️ Download code', data=code.encode('utf-8'), file_name=f'StudySphere_code.{ext}', mime='text/plain', use_container_width=True, key='download_coding_lab')
+
+elif st.session_state.page == 38:
+    st.markdown('<div class="page-banner"><div class="page-title">🔬 Research Workspace</div><div class="page-sub">Organize research questions, source notes, evidence gaps, and grounded AI synthesis.</div></div>', unsafe_allow_html=True)
+    projects = cursor.execute('SELECT id, title, research_question, notes FROM research_projects WHERE user_id = ? ORDER BY updated_at DESC', (AUTH_ID,)).fetchall()
+    options = ['＋ New research project'] + [f'{r[1]} • {r[2][:70]}' for r in projects]
+    chosen = st.selectbox('Research project', options, key='research_project_selector')
+    if chosen == '＋ New research project':
+        title = st.text_input('Project title', key='research_new_title')
+        question = st.text_area('Research question', key='research_new_question')
+        notes = st.text_area('Research notes', height=100, key='research_new_notes')
+        if st.button('💾 Create research project', key='research_create_project', use_container_width=True):
+            if not title.strip() or not question.strip():
+                st.warning('Project title and research question are required.')
+            else:
+                now = datetime.now().isoformat(timespec='seconds')
+                project_id = _advanced_id('research')
+                cursor.execute('INSERT INTO research_projects (id, user_id, title, research_question, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', (project_id, AUTH_ID, title.strip(), question.strip(), notes.strip(), now, now))
+                conn.commit()
+                st.success('Research project created.')
+                st.rerun()
+    else:
+        project = projects[options.index(chosen) - 1]
+        project_id, project_title, research_question, research_notes = project
+        sources = cursor.execute('SELECT id, title, url, notes FROM research_sources WHERE project_id = ? AND user_id = ? ORDER BY created_at', (project_id, AUTH_ID)).fetchall()
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">Research question</div><div class="ai-title">{project_title}</div><div class="ai-text">{research_question}</div></div>', unsafe_allow_html=True)
+        left, right = st.columns(2)
+        with left:
+            st.markdown('<div class="panel"><div class="panel-title">📚 Sources</div><div class="panel-sub">Add sources and your own evidence notes; StudySphere will not invent a source.</div></div>', unsafe_allow_html=True)
+            source_title = st.text_input('Source title', key='research_source_title')
+            source_url = st.text_input('Source URL', key='research_source_url')
+            source_notes = st.text_area('Source notes', height=110, key='research_source_notes')
+            if st.button('➕ Add source', key='research_add_source', use_container_width=True):
+                if not source_title.strip():
+                    st.warning('Source title is required.')
+                else:
+                    cursor.execute('INSERT INTO research_sources (id, project_id, user_id, title, url, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', (_advanced_id('source'), project_id, AUTH_ID, source_title.strip(), source_url.strip(), source_notes.strip(), datetime.now().isoformat(timespec='seconds')))
+                    conn.commit()
+                    st.rerun()
+            for row in sources:
+                st.markdown(f'<div class="insight-card"><div><div class="panel-title">{row[1]}</div><div class="panel-sub">{row[2] or "No URL"}</div></div></div>', unsafe_allow_html=True)
+        with right:
+            if st.button('✨ Generate source-grounded synthesis', key='research_generate_synthesis', use_container_width=True):
+                with st.spinner('Building synthesis…'):
+                    st.session_state.research_synthesis = call_gemini_agent(GLOBAL_GEMINI_API_KEY, build_research_prompt(project_title, research_question, sources, research_notes))
+            if st.session_state.get('research_synthesis'):
+                st.markdown(st.session_state.research_synthesis)
+        st.markdown(f'[Search this research question on the web](https://www.google.com/search?q={quote_plus(research_question)})')
+
+elif st.session_state.page == 39:
+    st.markdown('<div class="page-banner"><div class="page-title">🚀 FYP Project Manager</div><div class="page-sub">Track your final-year project from idea to defense.</div></div>', unsafe_allow_html=True)
+    projects = cursor.execute('SELECT id, title, problem_statement, supervisor, target_date FROM fyp_projects WHERE user_id = ? ORDER BY updated_at DESC', (AUTH_ID,)).fetchall()
+    options = ['＋ New FYP project'] + [r[1] for r in projects]
+    chosen = st.selectbox('Project', options, key='fyp_project_selector')
+    if chosen == '＋ New FYP project':
+        title = st.text_input('Project title', key='fyp_new_title')
+        problem = st.text_area('Problem statement', height=120, key='fyp_new_problem')
+        supervisor = st.text_input('Supervisor', key='fyp_new_supervisor')
+        target = st.date_input('Target completion date', value=date.today(), key='fyp_new_date')
+        if st.button('🚀 Create FYP project', key='fyp_create_project', use_container_width=True):
+            if not title.strip():
+                st.warning('Project title is required.')
+            else:
+                ensure_fyp_project(AUTH_ID, title, problem, supervisor, target.isoformat())
+                st.success('FYP project created.')
+                st.rerun()
+    else:
+        project = projects[options.index(chosen) - 1]
+        project_id, title, problem, supervisor, target = project
+        milestones = cursor.execute('SELECT id, title, due_date, status, notes FROM fyp_milestones WHERE project_id = ? AND user_id = ? ORDER BY position', (project_id, AUTH_ID)).fetchall()
+        done = sum(row[3] == 'Done' for row in milestones)
+        st.markdown(f'<div class="ai-panel"><div class="ai-badge">Final-year project</div><div class="ai-title">{title}</div><div class="ai-text">Supervisor: {supervisor or "Not set"} • Target: {target or "Not set"}</div></div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Milestones', len(milestones))
+        c2.metric('Completed', done)
+        c3.metric('Progress', f'{done / max(1, len(milestones)) * 100:.0f}%')
+        if problem:
+            st.markdown('<div class="panel"><div class="panel-title">Problem statement</div></div>', unsafe_allow_html=True)
+            st.write(problem)
+        with st.expander('➕ Add milestone'):
+            milestone_title = st.text_input('Milestone title', key='fyp_milestone_title')
+            milestone_date = st.date_input('Due date', value=date.today(), key='fyp_milestone_date')
+            milestone_notes = st.text_area('Notes', height=80, key='fyp_milestone_notes')
+            if st.button('Add milestone', key='fyp_add_milestone', use_container_width=True):
+                if milestone_title.strip():
+                    create_fyp_milestone(AUTH_ID, project_id, milestone_title, milestone_date.isoformat(), 'Not started', milestone_notes)
+                    st.rerun()
+                else:
+                    st.warning('Milestone title is required.')
+        for row in milestones:
+            options_status = ['Not started', 'In progress', 'Done', 'Blocked']
+            status = st.selectbox(f'Status • {row[1]}', options_status, index=options_status.index(row[3]) if row[3] in options_status else 0, key=f'fyp_status_{row[0]}')
+            if status != row[3]:
+                cursor.execute('UPDATE fyp_milestones SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', (status, datetime.now().isoformat(timespec='seconds'), row[0], AUTH_ID))
+                conn.commit()
+                st.rerun()
+
+elif st.session_state.page == 40:
+    st.markdown('<div class="page-banner"><div class="page-title">📄 AI CV & Portfolio</div><div class="page-sub">Build an evidence-based student CV from your real StudySphere profile.</div></div>', unsafe_allow_html=True)
+    profile = cursor.execute('SELECT name, email, university, degree, semester, career_goal, skills FROM users WHERE auth_id = ?', (AUTH_ID,)).fetchone()
+    if profile:
+        left, right = st.columns(2)
+        with left:
+            contact = st.text_input('Contact line', value=profile[1] or '', key='cv_contact_line')
+            projects = st.text_area('Projects', height=140, placeholder='Project name — your contribution — technology — result', key='cv_projects')
+        with right:
+            certifications = st.text_area('Certifications', height=100, key='cv_certifications')
+            achievements = st.text_area('Achievements', height=100, key='cv_achievements')
+        cv_text = make_student_cv_text(profile, projects, certifications, achievements, contact)
+        st.code(cv_text, language='text')
+        st.download_button('⬇️ Download CV as TXT', data=cv_text.encode('utf-8'), file_name='StudySphere_CV.txt', mime='text/plain', use_container_width=True, key='download_cv_txt')
+        if DocxDocument is not None:
+            doc = DocxDocument()
+            for line in cv_text.splitlines():
+                if line.isupper() and line.strip():
+                    doc.add_heading(line.strip(), level=2)
+                else:
+                    doc.add_paragraph(line)
+            output = io.BytesIO()
+            doc.save(output)
+            output.seek(0)
+            st.download_button('📄 Download CV as Word', data=output.getvalue(), file_name='StudySphere_CV.docx', mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document', use_container_width=True, key='download_cv_docx')
+
+elif st.session_state.page == 41:
+    st.markdown('<div class="page-banner"><div class="page-title">🎙️ Voice Study Mode</div><div class="page-sub">Generate spoken-friendly explanations and use your browser to read them aloud.</div></div>', unsafe_allow_html=True)
+    request_text = st.text_area('Study request', height=130, placeholder='Explain normalization like a beginner and then ask me three questions.', key='voice_study_request')
+    if st.button('🧠 Generate explanation', key='voice_generate_explanation', use_container_width=True):
+        if not request_text.strip():
+            st.warning('Enter a study request first.')
+        else:
+            st.session_state.voice_study_answer = call_gemini_agent(GLOBAL_GEMINI_API_KEY, 'You are StudySphere Voice Tutor. Use short spoken-friendly sentences and finish with three quick practice questions.\n\n' + request_text.strip())
+    answer = st.session_state.get('voice_study_answer')
+    if answer:
+        st.markdown(answer)
+        safe_answer = json.dumps(re.sub(r'[*_`#]', '', answer[:12000]))
+    if st_html is not None:
+        with st.expander('🎤 Voice input — browser microphone'):
+            st.caption('Use the microphone when your browser supports SpeechRecognition. Copy the transcript into the Study request box above.')
+            st_html("""
+            <div style=\"font-family:Arial,sans-serif;border:1px solid #D8E1EC;border-radius:14px;padding:14px;background:#FFFFFF;\">
+              <button id=\"start-listen\" style=\"padding:10px 14px;border-radius:10px;border:1px solid #0B1F3A;background:#0B1F3A;color:#fff;font-weight:700;cursor:pointer;\">🎙️ Start listening</button>
+              <button id=\"stop-listen\" style=\"padding:10px 14px;border-radius:10px;border:1px solid #D8E1EC;background:#F4F7FB;color:#0B1F3A;font-weight:700;cursor:pointer;margin-left:6px;\">⏹ Stop</button>
+              <button id=\"copy-transcript\" style=\"padding:10px 14px;border-radius:10px;border:1px solid #38BDF8;background:#FFFFFF;color:#0B1F3A;font-weight:700;cursor:pointer;margin-left:6px;\">📋 Copy transcript</button>
+              <div id=\"voice-status\" style=\"margin-top:10px;font-size:12px;color:#60708A;\">Ready</div>
+              <textarea id=\"voice-transcript\" style=\"width:100%;min-height:90px;margin-top:8px;padding:10px;border:1px solid #D8E1EC;border-radius:10px;box-sizing:border-box;\" placeholder=\"Your voice transcript will appear here…\"></textarea>
+              <script>
+              const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+              const startBtn=document.getElementById('start-listen'), stopBtn=document.getElementById('stop-listen'), copyBtn=document.getElementById('copy-transcript'), box=document.getElementById('voice-transcript'), status=document.getElementById('voice-status');
+              let rec=null;
+              if(!Recognition){ startBtn.disabled=true; status.textContent='Speech recognition is not supported by this browser.'; }
+              else { rec=new Recognition(); rec.lang='en-US'; rec.interimResults=true; rec.continuous=false; rec.onstart=()=>status.textContent='Listening…'; rec.onresult=e=>{ let t=''; for(let i=e.resultIndex;i<e.results.length;i++) t+=e.results[i][0].transcript; box.value=t; }; rec.onerror=e=>status.textContent='Microphone error: '+e.error; rec.onend=()=>status.textContent='Ready'; startBtn.onclick=()=>{try{rec.start()}catch(e){}}; stopBtn.onclick=()=>{try{rec.stop()}catch(e){}}; }
+              copyBtn.onclick=async()=>{try{await navigator.clipboard.writeText(box.value);status.textContent='Transcript copied.'}catch(e){status.textContent='Copy failed; select and copy manually.'}};
+              </script>
+            </div>
+            """, height=220)
+
+        if st_html is not None:
+            st_html(f'''<div style="padding:12px;border:1px solid #D8E1EC;border-radius:14px;background:#FFFFFF;font-family:Arial,sans-serif;"><button id="speak" style="padding:10px 16px;border-radius:10px;border:1px solid #123D6A;background:#0B1F3A;color:white;font-weight:700;cursor:pointer;">🔊 Read aloud</button><button id="stop" style="padding:10px 16px;border-radius:10px;border:1px solid #D8E1EC;background:#F4F7FB;color:#0B1F3A;font-weight:700;cursor:pointer;margin-left:8px;">⏹ Stop</button><script>const text={safe_answer};document.getElementById('speak').onclick=()=>{{window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=.94;window.speechSynthesis.speak(u)}};document.getElementById('stop').onclick=()=>window.speechSynthesis.cancel();</script></div>''', height=74)
+        else:
+            st.info('Use your browser text-to-speech accessibility tools to hear the answer.')
 
 st.markdown('<div style="text-align:center;padding:24px 0 4px;color:#64748B;font-size:11px;">StudySphere • Learn smarter. Plan better. Achieve more.</div>', unsafe_allow_html=True)
 
