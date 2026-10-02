@@ -2809,6 +2809,168 @@ input, textarea,
 
 
 # ============================================================
+# PREMIUM WORKSPACE NAVIGATION — animated button-style controls
+# ============================================================
+st.markdown(
+    """
+<style>
+/* Turn the Workspace radio navigation into polished, button-like controls. */
+[data-testid="stSidebar"] [role="radiogroup"] {
+  display:flex !important;
+  flex-direction:column !important;
+  gap:8px !important;
+  margin-top:4px !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  position:relative !important;
+  display:flex !important;
+  align-items:center !important;
+  width:100% !important;
+  min-height:44px !important;
+  box-sizing:border-box !important;
+  margin:0 !important;
+  padding:9px 12px !important;
+  border:1px solid var(--ss-border) !important;
+  border-radius:14px !important;
+  background:linear-gradient(145deg,var(--ss-surface),var(--ss-surface-2)) !important;
+  box-shadow:0 3px 10px rgba(15,23,42,.035) !important;
+  overflow:hidden !important;
+  cursor:pointer !important;
+  transition:
+    transform .20s cubic-bezier(.2,.8,.2,1),
+    box-shadow .20s ease,
+    border-color .20s ease,
+    background .20s ease !important;
+}
+
+/* Hide the radio bullet itself. */
+[data-testid="stSidebar"] [role="radiogroup"] label input,
+[data-testid="stSidebar"] [role="radiogroup"] [role="radio"] {
+  opacity:0 !important;
+  width:0 !important;
+  height:0 !important;
+  margin:0 !important;
+  pointer-events:none !important;
+  position:absolute !important;
+}
+
+/* Sliding highlight creates a subtle premium animation on hover. */
+[data-testid="stSidebar"] [role="radiogroup"] label::before {
+  content:"" !important;
+  position:absolute !important;
+  top:-35% !important;
+  left:-42% !important;
+  width:34% !important;
+  height:170% !important;
+  background:linear-gradient(
+    90deg,
+    transparent,
+    rgba(255,255,255,.22),
+    transparent
+  ) !important;
+  transform:skewX(-22deg) !important;
+  transition:left .65s ease !important;
+  pointer-events:none !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label:hover::before {
+  left:118% !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+  transform:translateX(4px) !important;
+  border-color:rgba(124,58,237,.32) !important;
+  box-shadow:0 8px 18px rgba(76,29,149,.10) !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label:active {
+  transform:translateX(2px) scale(.985) !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label > div {
+  width:100% !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label p,
+[data-testid="stSidebar"] [role="radiogroup"] label span {
+  position:relative !important;
+  z-index:2 !important;
+  margin:0 !important;
+  color:var(--ss-text) !important;
+  font-size:12px !important;
+  font-weight:750 !important;
+  line-height:1.25 !important;
+  transition:color .20s ease, transform .20s ease !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label:hover p,
+[data-testid="stSidebar"] [role="radiogroup"] label:hover span {
+  transform:translateX(2px) !important;
+}
+
+/* Active workspace item: stronger contrast + moving accent line. */
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
+  background:linear-gradient(135deg,rgba(124,58,237,.14),rgba(37,99,235,.08)) !important;
+  border-color:rgba(124,58,237,.40) !important;
+  box-shadow:
+    inset 4px 0 0 var(--ss-primary),
+    0 10px 24px rgba(76,29,149,.12) !important;
+  transform:translateX(3px) !important;
+  animation:ssWorkspaceActive .55s ease-out !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span {
+  color:var(--ss-primary) !important;
+  font-weight:850 !important;
+}
+
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {
+  content:"›" !important;
+  position:absolute !important;
+  right:12px !important;
+  top:50% !important;
+  transform:translateY(-50%) translateX(0) !important;
+  color:var(--ss-primary) !important;
+  font-size:19px !important;
+  font-weight:900 !important;
+  line-height:1 !important;
+  opacity:.92 !important;
+  z-index:2 !important;
+  animation:ssWorkspaceArrow 1.15s ease-in-out infinite !important;
+}
+
+@keyframes ssWorkspaceActive {
+  0% { transform:translateX(0) scale(.985); opacity:.72; }
+  100% { transform:translateX(3px) scale(1); opacity:1; }
+}
+
+@keyframes ssWorkspaceArrow {
+  0%,100% { transform:translateY(-50%) translateX(0); }
+  50% { transform:translateY(-50%) translateX(3px); }
+}
+
+/* Slightly tighter labels around the animated button stack. */
+[data-testid="stSidebar"] .sidebar-label + [data-testid="stVerticalBlock"] {
+  margin-top:2px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="stSidebar"] [role="radiogroup"] label,
+  [data-testid="stSidebar"] [role="radiogroup"] label::before,
+  [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {
+    animation:none !important;
+    transition:none !important;
+  }
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
 # LOCAL AUTHENTICATION HELPERS
 # ============================================================
 
