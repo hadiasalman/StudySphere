@@ -2151,23 +2151,23 @@ GLOBAL_GEMINI_API_KEY = secret_gemini_key or db_gemini_key
 dark_mode = st.session_state.dark_mode
 
 if dark_mode:
-    bg = "#110D1B"
-    card = "#181321"
-    card2 = "#211A2C"
-    text = "#F7F3FF"
-    muted = "#BEB4CD"
-    border = "#352A43"
-    sidebar_bg = "#0F0B17"
+    bg = "#08111F"
+    card = "#0E1A2B"
+    card2 = "#14253B"
+    text = "#F4F8FC"
+    muted = "#A9B7C9"
+    border = "#29415F"
+    sidebar_bg = "#07101C"
     shadow = "0 18px 42px rgba(0,0,0,.30)"
 else:
-    bg = "#F8F7FC"
+    bg = "#FFFFFF"
     card = "#FFFFFF"
-    card2 = "#F3F0F8"
-    text = "#17141C"
-    muted = "#6B6475"
-    border = "#E7E0EF"
-    sidebar_bg = "#FFFEFF"
-    shadow = "0 16px 36px rgba(38,25,55,.07)"
+    card2 = "#F4F7FB"
+    text = "#172033"
+    muted = "#60708A"
+    border = "#D8E1EC"
+    sidebar_bg = "#FFFFFF"
+    shadow = "0 16px 36px rgba(15,47,82,.08)"
 
 st.markdown(
     """
@@ -2193,7 +2193,7 @@ html, body, [class*="css"] { font-family: Inter, ui-sans-serif, system-ui, -appl
 .stApp { background:var(--ss-bg); color:var(--ss-text); }
 [data-testid="stAppViewContainer"] {
   background:
-    radial-gradient(circle at 7% 0%, rgba(124,58,237,.028), transparent 18%),
+    radial-gradient(circle at 7% 0%, rgba(22,58,99,.028), transparent 18%),
     radial-gradient(circle at 100% 12%, rgba(249,115,22,.022), transparent 16%),
     var(--ss-bg) !important;
 }
@@ -2269,13 +2269,13 @@ div.stButton > button p, div.stButton > button span { color:#fff !important; }
 [data-testid="stDownloadButton"] > button {
   min-height:44px !important;
   border-radius:13px !important;
-  background:linear-gradient(135deg,#7C3AED,#6D28D9) !important;
-  border:1px solid #5B21B6 !important;
+  background:linear-gradient(135deg,#163A63,#0F2F52) !important;
+  border:1px solid #0B2340 !important;
   color:#FFFFFF !important;
   box-shadow:0 8px 18px rgba(76,29,149,.18) !important;
 }
 [data-testid="stDownloadButton"] > button:hover {
-  background:linear-gradient(135deg,#6D28D9,#5B21B6) !important;
+  background:linear-gradient(135deg,#0F2F52,#0B2340) !important;
   transform:translateY(-1px) !important;
 }
 [data-testid="stDownloadButton"] > button p,
@@ -2465,7 +2465,7 @@ div.stButton > button p, div.stButton > button span { color:#fff !important; }
 }
 [data-testid="stAppViewContainer"] {
   background:
-    radial-gradient(circle at 8% 0%, rgba(124,58,237,.045), transparent 20%),
+    radial-gradient(circle at 8% 0%, rgba(22,58,99,.045), transparent 20%),
     radial-gradient(circle at 95% 12%, rgba(249,115,22,.035), transparent 18%),
     var(--ss-bg) !important;
 }
@@ -2476,11 +2476,11 @@ div.stButton > button {
   min-height:44px !important;
   background:linear-gradient(135deg,var(--ss-primary),var(--ss-primary-hover)) !important;
   border:1px solid var(--ss-primary) !important;
-  box-shadow:0 8px 18px rgba(124,58,237,.16) !important;
+  box-shadow:0 8px 18px rgba(22,58,99,.16) !important;
   letter-spacing:-.1px;
 }
 div.stButton > button:hover {
-  box-shadow:0 12px 24px rgba(124,58,237,.22) !important;
+  box-shadow:0 12px 24px rgba(22,58,99,.22) !important;
   transform:translateY(-2px) !important;
 }
 
@@ -2499,18 +2499,18 @@ input:focus, textarea:focus {
 .elite-hero {
   background:
     radial-gradient(circle at 82% 18%, rgba(251,146,60,.24), transparent 21%),
-    radial-gradient(circle at 62% 88%, rgba(167,139,250,.17), transparent 27%),
-    linear-gradient(135deg,#24103F 0%,#5B21B6 48%,#21152C 100%) !important;
+    radial-gradient(circle at 62% 88%, rgba(42,91,138,.17), transparent 27%),
+    linear-gradient(135deg,#0A1A2F 0%,#0B2340 48%,#0A1728 100%) !important;
   box-shadow:0 26px 58px rgba(76,29,149,.20) !important;
 }
-.elite-kicker { color:#F5D0FE !important; }
+.elite-kicker { color:#DCEAF7 !important; }
 .elite-sub { color:rgba(255,255,255,.78) !important; }
 .elite-pill {
   background:rgba(255,255,255,.075) !important;
   border-color:rgba(255,255,255,.14) !important;
 }
 .elite-orbit-core {
-  background:linear-gradient(145deg,#FB923C,#7C3AED) !important;
+  background:linear-gradient(145deg,#FB923C,#163A63) !important;
   box-shadow:0 18px 36px rgba(0,0,0,.22) !important;
 }
 .elite-orbit-ring.small { border-color:rgba(251,146,60,.25) !important; }
@@ -2522,10 +2522,10 @@ input:focus, textarea:focus {
   box-shadow:0 14px 30px rgba(38,25,55,.045) !important;
 }
 .elite-kpi:hover {
-  border-color:rgba(124,58,237,.30) !important;
+  border-color:rgba(22,58,99,.30) !important;
 }
 .elite-kpi-icon {
-  background:linear-gradient(145deg,rgba(124,58,237,.10),rgba(249,115,22,.08)) !important;
+  background:linear-gradient(145deg,rgba(22,58,99,.10),rgba(249,115,22,.08)) !important;
 }
 
 /* Quick action cards */
@@ -2541,7 +2541,7 @@ input:focus, textarea:focus {
 }
 .elite-action-shell div.stButton > button:hover {
   background:var(--ss-primary-soft) !important;
-  border-color:rgba(124,58,237,.18) !important;
+  border-color:rgba(22,58,99,.18) !important;
 }
 .elite-action-shell div.stButton > button p,
 .elite-action-shell div.stButton > button span {
@@ -2558,16 +2558,16 @@ input:focus, textarea:focus {
 }
 
 /* Progress */
-.elite-ring { background:conic-gradient(#7C3AED calc(var(--progress) * 1%), var(--ss-border) 0) !important; }
-.elite-mini-fill { background:linear-gradient(90deg,#7C3AED,#FB923C) !important; }
+.elite-ring { background:conic-gradient(#163A63 calc(var(--progress) * 1%), var(--ss-border) 0) !important; }
+.elite-mini-fill { background:linear-gradient(90deg,#163A63,#FB923C) !important; }
 
 /* AI banner */
 .elite-ai {
-  background:linear-gradient(135deg,#3B176F 0%,#6D28D9 52%,#8A3B12 100%) !important;
+  background:linear-gradient(135deg,#0B2340 0%,#0F2F52 52%,#8A3B12 100%) !important;
   border-color:rgba(251,146,60,.20) !important;
   box-shadow:0 20px 42px rgba(76,29,149,.18) !important;
 }
-.elite-ai-badge { color:#FED7AA !important; }
+.elite-ai-badge { color:#DCEAF7 !important; }
 
 /* Tables */
 [data-testid="stDataFrame"] {
@@ -2648,7 +2648,7 @@ body div[data-baseweb="popover"] > div {
 
 
 </style>
-""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#7C3AED" if not dark_mode else "#A78BFA").replace("__PRIMARY_HOVER__", "#6D28D9" if not dark_mode else "#8B5CF6").replace("__PRIMARY_SOFT__", "rgba(124,58,237,.10)" if not dark_mode else "rgba(167,139,250,.14)").replace("__ACCENT__", "#F97316" if not dark_mode else "#FB923C").replace("__ACCENT_SOFT__", "rgba(249,115,22,.12)" if not dark_mode else "rgba(251,146,60,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
+""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#163A63" if not dark_mode else "#6F91B5").replace("__PRIMARY_HOVER__", "#0F2F52" if not dark_mode else "#2A5B8A").replace("__PRIMARY_SOFT__", "rgba(22,58,99,.10)" if not dark_mode else "rgba(42,91,138,.14)").replace("__ACCENT__", "#F97316" if not dark_mode else "#FB923C").replace("__ACCENT_SOFT__", "rgba(249,115,22,.12)" if not dark_mode else "rgba(251,146,60,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
     unsafe_allow_html=True,
 )
 
@@ -2680,12 +2680,12 @@ def time_based_greeting(hour):
 
 # Final control contrast layer — applies across the entire app and especially the
 # browser-rendered BaseWeb dropdown portal used by Streamlit.
-control_bg = "#241B33" if st.session_state.dark_mode else "#FFFFFF"
-control_bg_hover = "#302343" if st.session_state.dark_mode else "#F5F2FA"
-control_border = "#514264" if st.session_state.dark_mode else "#D8D0E2"
-control_text = "#F8F4FF" if st.session_state.dark_mode else "#17141C"
-control_accent = "#8B5CF6" if st.session_state.dark_mode else "#7C3AED"
-control_accent_hover = "#A78BFA" if st.session_state.dark_mode else "#6D28D9"
+control_bg = "#12243A" if st.session_state.dark_mode else "#FFFFFF"
+control_bg_hover = "#18314F" if st.session_state.dark_mode else "#F4F7FB"
+control_border = "#355373" if st.session_state.dark_mode else "#C9D5E3"
+control_text = "#F4F8FC" if st.session_state.dark_mode else "#172033"
+control_accent = "#2A5B8A" if st.session_state.dark_mode else "#163A63"
+control_accent_hover = "#6F91B5" if st.session_state.dark_mode else "#0F2F52"
 
 st.markdown(
     f"""
@@ -2720,7 +2720,7 @@ button[kind="primary"],
   background:linear-gradient(135deg,{control_accent},{control_accent_hover}) !important;
   border:1px solid {control_accent_hover} !important;
   color:#FFFFFF !important;
-  box-shadow:0 8px 20px rgba(124,58,237,.20) !important;
+  box-shadow:0 8px 20px rgba(22,58,99,.20) !important;
 }}
 .stButton > button:hover,
 button[kind="primary"]:hover,
@@ -2781,7 +2781,7 @@ div[data-baseweb="popover"] [role="option"]:hover {{
   color:{control_text} !important;
 }}
 div[data-baseweb="popover"] [role="option"][aria-selected="true"] {{
-  background:rgba(139,92,246,.20) !important;
+  background:rgba(42,91,138,.20) !important;
   color:{control_accent_hover} !important;
 }}
 div[data-baseweb="popover"] [role="option"][aria-selected="true"] span,
@@ -2832,7 +2832,7 @@ st.markdown(
   box-sizing:border-box !important;
   margin:0 !important;
   padding:8px 14px 8px 13px !important;
-  border:1.5px solid rgba(124,58,237,.22) !important;
+  border:1.5px solid rgba(22,58,99,.22) !important;
   border-radius:13px !important;
   background:linear-gradient(180deg,var(--ss-surface),var(--ss-surface-2)) !important;
   box-shadow:
@@ -2898,10 +2898,10 @@ st.markdown(
 
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
   transform:translateX(3px) !important;
-  border-color:rgba(124,58,237,.52) !important;
+  border-color:rgba(22,58,99,.52) !important;
   box-shadow:
     0 7px 18px rgba(76,29,149,.10),
-    inset 0 0 0 1px rgba(124,58,237,.08) !important;
+    inset 0 0 0 1px rgba(22,58,99,.08) !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] label:active {
@@ -2914,7 +2914,7 @@ st.markdown(
 
 /* Selected button gets a clean outline and a compact active marker. */
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
-  background:linear-gradient(135deg,rgba(124,58,237,.13),rgba(37,99,235,.07)) !important;
+  background:linear-gradient(135deg,rgba(22,58,99,.13),rgba(37,99,235,.07)) !important;
   border-color:var(--ss-primary) !important;
   box-shadow:
     inset 4px 0 0 var(--ss-primary),
