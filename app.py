@@ -3446,29 +3446,63 @@ button[kind="secondary"]:hover,
   transform:translateY(-1px) !important;
   box-shadow:0 11px 25px rgba(37,66,180,.24) !important;
 }}
-/* Keep clicked/focused/active buttons in the same navy palette. */
+/* Keep clicked/focused/active/pressed buttons in the same navy palette. */
 .stButton > button:focus,
 .stButton > button:focus-visible,
 .stButton > button:active,
+.stButton > button[aria-pressed="true"],
 button[kind="primary"]:focus,
 button[kind="primary"]:focus-visible,
 button[kind="primary"]:active,
+button[kind="primary"][aria-pressed="true"],
 button[kind="secondary"]:focus,
 button[kind="secondary"]:focus-visible,
 button[kind="secondary"]:active,
+button[kind="secondary"][aria-pressed="true"],
 [data-testid="stFormSubmitButton"] > button:focus,
 [data-testid="stFormSubmitButton"] > button:focus-visible,
 [data-testid="stFormSubmitButton"] > button:active,
+[data-testid="stFormSubmitButton"] > button[aria-pressed="true"],
 [data-testid="stDownloadButton"] > button:focus,
 [data-testid="stDownloadButton"] > button:focus-visible,
 [data-testid="stDownloadButton"] > button:active,
+[data-testid="stDownloadButton"] > button[aria-pressed="true"],
 [data-testid="stSidebar"] .stButton > button:focus,
 [data-testid="stSidebar"] .stButton > button:focus-visible,
-[data-testid="stSidebar"] .stButton > button:active {{
-  background:linear-gradient(135deg,{control_accent_hover} 0%,{control_accent} 100%) !important;
-  border-color:{control_border_hover} !important;
+[data-testid="stSidebar"] .stButton > button:active,
+[data-testid="stSidebar"] .stButton > button[aria-pressed="true"],
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:focus,
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:focus-visible,
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:active,
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"][aria-pressed="true"],
+[data-testid="stSidebar"] button[data-testid="baseButton-primary"]:focus,
+[data-testid="stSidebar"] button[data-testid="baseButton-primary"]:focus-visible,
+[data-testid="stSidebar"] button[data-testid="baseButton-primary"]:active,
+[data-testid="stSidebar"] button[data-testid="baseButton-primary"][aria-pressed="true"] {{
+  background:{control_accent} !important;
+  background-color:{control_accent} !important;
+  border-color:{control_accent_hover} !important;
   color:{button_text} !important;
   box-shadow:0 0 0 2px rgba(56,189,248,.28), 0 9px 24px rgba(11,31,58,.20) !important;
+  outline:none !important;
+  -webkit-tap-highlight-color:transparent !important;
+}}
+
+/* Streamlit may apply its own focus background through nested wrappers. */
+[data-testid="stSidebar"] .stButton,
+[data-testid="stSidebar"] .stButton > div,
+[data-testid="stSidebar"] .stButton > div > button,
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {{
+  background-color:transparent !important;
+}}
+[data-testid="stSidebar"] .stButton > div > button:focus,
+[data-testid="stSidebar"] .stButton > div > button:focus-visible,
+[data-testid="stSidebar"] .stButton > div > button:active,
+[data-testid="stSidebar"] .stButton > div > button[aria-pressed="true"] {{
+  background:{control_accent} !important;
+  background-color:{control_accent} !important;
+  color:{button_text} !important;
 }}
 .stButton > button:focus *,
 .stButton > button:focus-visible *,
@@ -3516,6 +3550,7 @@ button[kind="secondary"] div,
   background:linear-gradient(135deg,{control_accent} 0%,{control_border_hover} 100%) !important;
   border-color:{control_border_hover} !important;
   color:{button_text} !important;
+  background-color:{control_accent} !important;
   box-shadow:inset 4px 0 0 #38BDF8, 0 9px 24px rgba(37,66,180,.24) !important;
 }}
 .sidebar-nav-active div.stButton > button p,
