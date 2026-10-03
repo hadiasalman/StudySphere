@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import math
+import random
 import urllib.error
 import urllib.request
 import hmac
@@ -175,6 +176,12 @@ if "flashcard_deck" not in st.session_state:
     st.session_state.flashcard_deck = []
 if "flashcard_index" not in st.session_state:
     st.session_state.flashcard_index = 0
+
+if "quiz_bank" not in st.session_state:
+    st.session_state.quiz_bank = []
+
+if "quiz_deck_signature" not in st.session_state:
+    st.session_state.quiz_deck_signature = ""
 if "quiz_score" not in st.session_state:
     st.session_state.quiz_score = 0
 if "quiz_answered" not in st.session_state:
@@ -393,6 +400,15 @@ for table_name in ["subjects", "assignments", "exams", "tasks"]:
     existing_columns = [row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()]
     if "user_id" not in existing_columns:
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN user_id TEXT")
+
+# Backward-compatible exam schema migration. Older StudySphere databases
+# created the exams table before calendar support added exam time and room.
+# Add the missing columns without touching or deleting existing exam records.
+exam_columns = {row[1] for row in cursor.execute("PRAGMA table_info(exams)").fetchall()}
+if "exam_time" not in exam_columns:
+    cursor.execute("ALTER TABLE exams ADD COLUMN exam_time TEXT DEFAULT ''")
+if "room" not in exam_columns:
+    cursor.execute("ALTER TABLE exams ADD COLUMN room TEXT DEFAULT ''")
 
 chat_session_columns = [row[1] for row in cursor.execute("PRAGMA table_info(chat_sessions)").fetchall()]
 if "gemini_interaction_id" not in chat_session_columns:
@@ -2579,15 +2595,72 @@ footer { visibility:hidden; }
 .user-name { font-size:12px; font-weight:800; }
 .user-email { font-size:9px; color:var(--ss-muted) !important; overflow-wrap:anywhere; margin-top:2px; }
 
-/* Radio navigation */
-[data-testid="stSidebar"] [role="radiogroup"] { gap:4px; }
-[data-testid="stSidebar"] [role="radiogroup"] label {
-  border-radius:11px; padding:7px 10px; margin:0 !important; transition:.16s ease;
+/* Workspace categories + navigation buttons */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+  border:1px solid var(--ss-border) !important;
+  border-radius:14px !important;
+  background:var(--ss-surface) !important;
+  margin:7px 0 !important;
+  overflow:hidden !important;
+  box-shadow:0 4px 14px rgba(11,31,58,.035);
 }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:var(--ss-surface-2); }
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] { background:rgba(37,99,235,.09); }
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span { color:var(--ss-primary) !important; font-weight:800; }
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary {
+  padding:11px 12px !important;
+  font-weight:850 !important;
+  color:var(--ss-text) !important;
+  transition:background .16s ease, color .16s ease;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover {
+  background:var(--ss-surface-2) !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary {
+  color:var(--ss-primary) !important;
+  border-bottom:1px solid var(--ss-border) !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] .streamlit-expanderContent {
+  padding:7px 7px 8px !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button {
+  min-height:38px !important;
+  padding:7px 10px !important;
+  margin:2px 0 !important;
+  border-radius:10px !important;
+  background:transparent !important;
+  border:1px solid transparent !important;
+  box-shadow:none !important;
+  color:var(--ss-text) !important;
+  text-align:left !important;
+  justify-content:flex-start !important;
+  transition:transform .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button:hover {
+  transform:translateX(3px) !important;
+  background:var(--ss-surface-2) !important;
+  border-color:var(--ss-border) !important;
+  box-shadow:0 5px 12px rgba(11,31,58,.06) !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button p,
+[data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button span {
+  color:var(--ss-text) !important;
+  font-size:11px !important;
+  font-weight:750 !important;
+}
+.sidebar-nav-active div.stButton > button {
+  background:linear-gradient(90deg,var(--ss-primary-soft),rgba(56,189,248,.07)) !important;
+  border-color:rgba(11,31,58,.24) !important;
+  box-shadow:inset 3px 0 0 var(--ss-primary), 0 6px 14px rgba(11,31,58,.07) !important;
+}
+.sidebar-nav-active div.stButton > button p,
+.sidebar-nav-active div.stButton > button span {
+  color:var(--ss-primary) !important;
+  font-weight:900 !important;
+}
+.sidebar-category-count {
+  color:var(--ss-muted) !important;
+  font-size:9px !important;
+  font-weight:800 !important;
+  margin-left:4px !important;
+}
 
 /* Inputs */
 input, textarea {
@@ -6808,39 +6881,130 @@ def _student_parse_date(value):
 
 
 def _student_make_cloze_cards(text_value, limit=20):
-    """Create simple, offline cloze cards from stored study text.
+    """Create distinct offline cloze cards from study text.
 
-    This intentionally does not call Gemini, so flashcard generation remains
-    available even when the student's AI quota is exhausted.
+    The answer term for each card must be meaningfully different from the
+    answers already selected for the deck. This prevents the quiz from being
+    built around the same repeated correct answer.
     """
     raw = re.sub(r"\s+", " ", str(text_value or "")).strip()
     if len(raw) < 60:
         return []
+
     sentences = re.split(r"(?<=[.!?])\s+", raw)
     cards = []
-    seen = set()
+    seen_sentences = set()
+    seen_answers = set()
     stop_words = {
         "about", "after", "again", "being", "between", "could", "their", "there", "these",
         "those", "which", "while", "where", "what", "when", "with", "from", "that", "this",
         "have", "will", "into", "than", "then", "them", "they", "your", "you", "also", "more",
         "using", "used", "such", "some", "only", "very", "each", "over", "under", "within",
+        "because", "through", "whereas", "whose", "would", "should", "their", "there", "then",
+        "system", "student", "students", "course", "topic", "example", "important", "different",
     }
+
     for sentence in sentences:
         clean = sentence.strip(" -•")
+        if not clean or clean.casefold() in seen_sentences:
+            continue
         words = re.findall(r"[A-Za-z][A-Za-z0-9-]{4,}", clean)
         ranked = [w for w in words if w.casefold() not in stop_words]
-        if not clean or len(ranked) < 2:
+        if len(ranked) < 2:
             continue
-        answer = max(ranked, key=lambda w: (len(w), len(set(w.casefold()))))
-        key = clean.casefold()
-        if key in seen:
+
+        # Prefer a distinctive term, but do not reuse an answer already used
+        # by another card. Ties are resolved deterministically for stability.
+        candidates = sorted(
+            ranked,
+            key=lambda w: (-len(w), -len(set(w.casefold())), w.casefold()),
+        )
+        answer = next((w for w in candidates if w.casefold() not in seen_answers), None)
+        if not answer:
             continue
-        seen.add(key)
-        question = re.sub(rf"\b{re.escape(answer)}\b", "_____", clean, count=1, flags=re.IGNORECASE)
+
+        question = re.sub(
+            rf"\b{re.escape(answer)}\b",
+            "_____",
+            clean,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if question == clean:
+            continue
+
+        seen_sentences.add(clean.casefold())
+        seen_answers.add(answer.casefold())
         cards.append({"question": question, "answer": answer, "source": clean})
-        if len(cards) >= limit:
+        if len(cards) >= int(limit):
             break
+
     return cards
+
+
+def _student_build_quiz(deck, options_per_question=4):
+    """Build a stable multiple-choice quiz with unique distractors.
+
+    Every question gets a different correct answer, up to four unique choices,
+    and the correct choice position is randomized once when the quiz is built.
+    """
+    if not deck:
+        return []
+
+    cleaned = []
+    seen_correct = set()
+    for index, card in enumerate(deck):
+        question = str(card.get("question") or "").strip()
+        answer = str(card.get("answer") or "").strip()
+        if not question or not answer:
+            continue
+        key = answer.casefold()
+        if key in seen_correct:
+            continue
+        seen_correct.add(key)
+        cleaned.append({"card_index": index, "question": question, "answer": answer})
+
+    answer_pool = [item["answer"] for item in cleaned]
+    if len(answer_pool) < 2:
+        return []
+
+    quiz = []
+    target_options = max(2, min(int(options_per_question), len(answer_pool)))
+    for item in cleaned:
+        distractor_pool = [
+            answer for answer in answer_pool
+            if answer.casefold() != item["answer"].casefold()
+        ]
+        # Prefer distractors that are not trivial substring variants of the
+        # correct answer, then fill any remaining slots from the pool.
+        filtered = [
+            answer for answer in distractor_pool
+            if item["answer"].casefold() not in answer.casefold()
+            and answer.casefold() not in item["answer"].casefold()
+        ]
+        random.shuffle(filtered)
+        selected = filtered[: max(0, target_options - 1)]
+        if len(selected) < target_options - 1:
+            remaining = [a for a in distractor_pool if a not in selected]
+            random.shuffle(remaining)
+            selected.extend(remaining[: target_options - 1 - len(selected)])
+
+        options = [item["answer"]] + selected
+        # A question is only valid when all options are genuinely different.
+        normalized = [opt.casefold() for opt in options]
+        if len(set(normalized)) != len(options):
+            continue
+        random.shuffle(options)
+        correct_index = next(i for i, value in enumerate(options) if value.casefold() == item["answer"].casefold())
+        quiz.append({
+            "card_index": item["card_index"],
+            "question": item["question"],
+            "options": options,
+            "correct_index": correct_index,
+            "answer": item["answer"],
+        })
+
+    return quiz
 
 
 
@@ -7230,64 +7394,144 @@ if logout:
 st.sidebar.markdown("---")
 st.sidebar.markdown('<div class="sidebar-label">Workspace</div>', unsafe_allow_html=True)
 
-nav_options = [
-    (1, "🏠  Dashboard"),
+# The Workspace is intentionally grouped into compact categories instead of a
+# single long list. Each category expands only when needed, while the active
+# page's category stays open so navigation remains obvious.
+
+workspace_categories = []
+
+workspace_categories.append((
+    "🏠  Home",
+    [
+        (1, "🏠  Dashboard"),
+    ],
+))
+
+academic_items = [
     (2, "📚  Subjects"),
     (3, "📝  Assignments"),
     (4, "📅  Exams"),
     (5, "✅  Study Planner"),
-    (6, "📄  Documents"),
-    (7, "👤  Profile"),
+]
+if st.session_state.user_role == "student":
+    academic_items.extend([
+        (20, "📊  My Attendance"),
+        (21, "💳  My Fees"),
+        (25, "📈  Grades & GPA"),
+    ])
+if has_permission("manage_university"):
+    academic_items.append((22, "💰  Student Fees"))
+workspace_categories.append(("📘  Academics", academic_items))
+
+learning_items = []
+if st.session_state.user_role == "student":
+    learning_items.extend([
+        (24, "🧠  Exam Preparation"),
+        (26, "🗂️  Flashcards & Quiz"),
+        (27, "🎯  Focus Mode"),
+        (29, "🧭  Academic Insights"),
+        (30, "📈  My Progress"),
+        (33, "🧠  Adaptive Learning"),
+        (36, "🧾  Syllabus Intelligence"),
+    ])
+if learning_items:
+    workspace_categories.append(("📖  Learning", learning_items))
+
+ai_tool_items = [
     (8, "🤖  AI Agent"),
+    (6, "📄  Documents"),
     (9, "📊  Presentation Studio"),
     (10, "🔄  Document Converter"),
     (23, "🖼️  Image Compressor"),
-    (14, "🎓  My University"),
-    (16, "🏛️  University Knowledge AI"),
 ]
 if st.session_state.user_role == "student":
-    nav_options.append((20, "📊  My Attendance"))
-    nav_options.append((21, "💳  My Fees"))
-    nav_options.append((24, "🧠  Exam Preparation"))
-    nav_options.append((25, "📈  Grades & GPA"))
-    nav_options.append((26, "🗂️  Flashcards & Quiz"))
-    nav_options.append((27, "🎯  Focus Mode"))
-    nav_options.append((28, "🔔  Notifications & Calendar"))
-    nav_options.append((29, "🧭  Academic Insights"))
-    nav_options.append((30, "📈  My Progress"))
-    nav_options.append((31, "🔗  LMS & Study Sync"))
-    nav_options.append((32, "🖼️  Multimodal AI Tutor"))
-    nav_options.append((33, "🧠  Adaptive Learning"))
-    nav_options.append((34, "🔐  AI Privacy"))
-    nav_options.append((35, "💼  Career & Skills Roadmap"))
-    nav_options.append((36, "🧾  Syllabus Intelligence"))
-    nav_options.append((37, "💻  Coding Lab"))
-    nav_options.append((38, "🔬  Research Workspace"))
-    nav_options.append((39, "🚀  FYP Project Manager"))
-    nav_options.append((40, "📄  AI CV & Portfolio"))
-    nav_options.append((41, "🎙️  Voice Study Mode"))
-if has_permission("manage_university"):
-    nav_options.append((22, "💰  Student Fees"))
-    nav_options.append((17, "🔗  Integration Center"))
-    nav_options.append((18, "📈  Institutional Analytics"))
+    ai_tool_items.extend([
+        (32, "🖼️  Multimodal AI Tutor"),
+        (41, "🎙️  Voice Study Mode"),
+        (37, "💻  Coding Lab"),
+        (38, "🔬  Research Workspace"),
+        (40, "📄  AI CV & Portfolio"),
+    ])
+workspace_categories.append(("🤖  AI & Tools", ai_tool_items))
+
+planning_items = []
+if st.session_state.user_role == "student":
+    planning_items.append((28, "🔔  Notifications & Calendar"))
+    planning_items.append((31, "🔗  LMS & Study Sync"))
+workspace_categories.append(("🗓️  Planning", planning_items))
+
+university_items = [(14, "🎓  My University"), (16, "🏛️  University Knowledge AI")]
+if st.session_state.user_role == "student":
+    university_items.extend([
+        (35, "💼  Career & Skills Roadmap"),
+        (39, "🚀  FYP Project Manager"),
+    ])
+workspace_categories.append(("🎓  University & Career", university_items))
+
+account_items = [(7, "👤  Profile")]
+if st.session_state.user_role == "student":
+    account_items.append((34, "🔐  AI Privacy"))
+workspace_categories.append(("👤  Account", account_items))
+
+admin_items = []
 if has_permission("manage_users"):
-    nav_options.append((11, "🔐  Creator Dashboard"))
+    admin_items.append((11, "🔐  Creator Dashboard"))
 if st.session_state.user_role == "creator" and st.session_state.is_admin:
-    nav_options.append((19, "🚀  Deployment Center"))
+    admin_items.append((19, "🚀  Deployment Center"))
 if has_permission("manage_faculty_courses"):
-    nav_options.append((12, "👨‍🏫  Faculty Center"))
-    nav_options.append((15, "🧠  Faculty AI"))
+    admin_items.extend([
+        (12, "👨‍🏫  Faculty Center"),
+        (15, "🧠  Faculty AI"),
+    ])
 if has_permission("manage_university"):
-    nav_options.append((13, "🏫  University Admin"))
-nav_labels = [f"{index:02d}  {label}" for index, (_, label) in enumerate(nav_options, start=1)]
-nav_page_ids = [page_id for page_id, _ in nav_options]
-selected_label = st.sidebar.radio(
-    "Navigation",
-    nav_labels,
-    index=nav_page_ids.index(st.session_state.page),
-    label_visibility="collapsed",
-)
-st.session_state.page = nav_page_ids[nav_labels.index(selected_label)]
+    admin_items.extend([
+        (13, "🏫  University Admin"),
+        (17, "🔗  Integration Center"),
+        (18, "📈  Institutional Analytics"),
+    ])
+if admin_items:
+    workspace_categories.append(("⚙️  Administration", admin_items))
+
+# Add one compact New Chat action to the AI category rather than duplicating
+# AI-related pages elsewhere in the sidebar.
+for _category_title, _items in workspace_categories:
+    if _category_title == "🤖  AI & Tools":
+        _items.insert(0, (8, "＋  New chat"))
+        break
+
+# The AI Agent and New chat share the same destination, but need distinct
+# actions. Build the button rendering separately so there are no duplicate
+# widget keys.
+
+def _workspace_button(page_id, label, key_suffix):
+    is_active = st.session_state.page == page_id and label != "＋  New chat"
+    button_key = "workspace_new_chat" if label == "＋  New chat" else f"workspace_nav_{page_id}"
+    display_label = ("●  " if is_active else "   ") + label
+    clicked = st.button(display_label, key=button_key, use_container_width=True)
+    if clicked:
+        if label == "＋  New chat":
+            st.session_state.active_chat_id = create_chat_session(AUTH_ID)
+            st.session_state.ai_messages = []
+            st.session_state.page = 8
+        else:
+            st.session_state.page = page_id
+        st.rerun()
+
+# Use stable keys derived from page IDs. This keeps Streamlit widget state
+# predictable across role changes and category expansion/collapse.
+for _cat_index, (_category_title, _items) in enumerate(workspace_categories, start=1):
+    if not _items:
+        continue
+    _contains_active = any(item_page == st.session_state.page for item_page, _ in _items)
+    with st.sidebar.expander(_category_title, expanded=_contains_active):
+        for _item_index, (_page_id, _label) in enumerate(_items, start=1):
+            _workspace_button(_page_id, _label, f"{_cat_index}_{_item_index}_{_page_id}")
+
+st.sidebar.markdown('<div class="sidebar-label" style="margin-top:14px;">Current access</div>', unsafe_allow_html=True)
+st.sidebar.caption(f"{role_display} workspace • {institution_name(INSTITUTION_ID)}")
+
+# Legacy hard-page guards remain below the navigation so direct state changes
+# and old saved sessions still respect role permissions.
 if st.session_state.page == 11 and not has_permission("manage_users"):
     st.session_state.page = 1
     st.rerun()
@@ -7328,105 +7572,9 @@ if st.session_state.page == 18 and not has_permission("manage_university"):
 if st.session_state.page == 19 and not (st.session_state.is_admin and st.session_state.user_role == "creator"):
     st.session_state.page = 1
     st.rerun()
-if st.session_state.page == 21 and st.session_state.user_role != "student":
-    st.session_state.page = 1
-    st.rerun()
-if st.session_state.page == 22 and not has_permission("manage_university"):
-    st.session_state.page = 1
-    st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown('<div class="sidebar-label">Intelligence</div>', unsafe_allow_html=True)
-st.sidebar.markdown("### 🤖 StudySphere AI")
-st.sidebar.caption("A conversational academic assistant that remembers your chats.")
-if st.sidebar.button("＋ New chat", key="new_chat_sidebar", use_container_width=True):
-    st.session_state.active_chat_id = create_chat_session(AUTH_ID)
-    st.session_state.ai_messages = []
-    st.session_state.page = 8
-    st.rerun()
-render_chat_history_sidebar(AUTH_ID)
-st.sidebar.markdown('<div class="sidebar-label">Create</div>', unsafe_allow_html=True)
-if st.sidebar.button("📊 Presentation Studio", key="presentation_studio_sidebar", use_container_width=True):
-    st.session_state.page = 9
-    st.rerun()
-if st.sidebar.button("🔄 Document Converter", key="document_converter_sidebar", use_container_width=True):
-    st.session_state.page = 10
-    st.rerun()
-if st.sidebar.button("🖼️ Image Compressor", key="image_compressor_sidebar", use_container_width=True):
-    st.session_state.page = 23
-    st.rerun()
-if st.sidebar.button("🎓 My University", key="my_university_sidebar", use_container_width=True):
-    st.session_state.page = 14
-    st.rerun()
-if st.session_state.user_role == "student" and st.sidebar.button("📊 My Attendance", key="my_attendance_sidebar", use_container_width=True):
-    st.session_state.page = 20
-    st.rerun()
-if st.session_state.user_role == "student" and st.sidebar.button("💳 My Fees", key="my_fees_sidebar", use_container_width=True):
-    st.session_state.page = 21
-    st.rerun()
-if has_permission("manage_university") and st.sidebar.button("💰 Student Fees", key="student_fees_admin_sidebar", use_container_width=True):
-    st.session_state.page = 22
-    st.rerun()
-if st.sidebar.button("🏛️ University Knowledge AI", key="university_knowledge_sidebar", use_container_width=True):
-    st.session_state.page = 16
-    st.rerun()
-if st.session_state.user_role == "student":
-    if st.sidebar.button("🖼️ Multimodal AI Tutor", key="multimodal_tutor_sidebar", use_container_width=True):
-        st.session_state.page = 32
-        st.rerun()
-    if st.sidebar.button("🧠 Adaptive Learning", key="adaptive_learning_sidebar", use_container_width=True):
-        st.session_state.page = 33
-        st.rerun()
-    if st.sidebar.button("🔐 AI Privacy", key="ai_privacy_sidebar", use_container_width=True):
-        st.session_state.page = 34
-        st.rerun()
-    if st.sidebar.button("💼 Career Roadmap", key="career_roadmap_sidebar", use_container_width=True):
-        st.session_state.page = 35
-        st.rerun()
-    if st.sidebar.button("🧾 Syllabus Intelligence", key="syllabus_intelligence_sidebar", use_container_width=True):
-        st.session_state.page = 36
-        st.rerun()
-    if st.sidebar.button("💻 Coding Lab", key="coding_lab_sidebar", use_container_width=True):
-        st.session_state.page = 37
-        st.rerun()
-    if st.sidebar.button("🔬 Research Workspace", key="research_workspace_sidebar", use_container_width=True):
-        st.session_state.page = 38
-        st.rerun()
-    if st.sidebar.button("🚀 FYP Project Manager", key="fyp_manager_sidebar", use_container_width=True):
-        st.session_state.page = 39
-        st.rerun()
-    if st.sidebar.button("📄 AI CV & Portfolio", key="ai_cv_portfolio_sidebar", use_container_width=True):
-        st.session_state.page = 40
-        st.rerun()
-    if st.sidebar.button("🎙️ Voice Study Mode", key="voice_study_sidebar", use_container_width=True):
-        st.session_state.page = 41
-        st.rerun()
-if has_permission("manage_users"):
-    st.sidebar.markdown('<div class="sidebar-label">Creator</div>', unsafe_allow_html=True)
-    if st.sidebar.button("🔐 Creator Dashboard", key="creator_dashboard_sidebar", use_container_width=True):
-        st.session_state.page = 11
-        st.rerun()
-if has_permission("manage_faculty_courses"):
-    st.sidebar.markdown('<div class="sidebar-label">Teaching</div>', unsafe_allow_html=True)
-    if st.sidebar.button("👨‍🏫 Faculty Center", key="faculty_center_sidebar", use_container_width=True):
-        st.session_state.page = 12
-        st.rerun()
-    if st.sidebar.button("🧠 Faculty AI", key="faculty_ai_sidebar", use_container_width=True):
-        st.session_state.page = 15
-        st.rerun()
-if has_permission("manage_university"):
-    st.sidebar.markdown('<div class="sidebar-label">Institution</div>', unsafe_allow_html=True)
-    if st.sidebar.button("🏫 University Admin", key="university_admin_sidebar", use_container_width=True):
-        st.session_state.page = 13
-        st.rerun()
-    if st.sidebar.button("🔗 Integration Center", key="integration_center_sidebar", use_container_width=True):
-        st.session_state.page = 17
-        st.rerun()
-    if st.sidebar.button("📈 Institutional Analytics", key="institutional_analytics_sidebar", use_container_width=True):
-        st.session_state.page = 18
-        st.rerun()
 
 # Theme is now controlled from the dashboard top-right.
+
 # Keep the state in session so the existing theme CSS updates consistently.
 
 # ============================================================
@@ -10410,6 +10558,10 @@ elif st.session_state.page == 26:
         st.session_state.flashcard_index = 0
         st.session_state.quiz_score = 0
         st.session_state.quiz_answered = 0
+        st.session_state.quiz_bank = _student_build_quiz(deck)
+        st.session_state.quiz_deck_signature = "|".join(
+            str(card.get("answer", "")).casefold() for card in deck
+        )
         if not deck:
             st.warning("Not enough clear sentences were found. Try a longer set of notes.")
         else:
@@ -10437,33 +10589,56 @@ elif st.session_state.page == 26:
             st.rerun()
 
         st.markdown('<div class="section-kicker" style="margin-top:24px;">Quick quiz</div>', unsafe_allow_html=True)
-        options = list(dict.fromkeys([str(item["answer"]) for item in deck]))
-        if len(options) >= 2:
-            current_quiz = deck[idx]
-            distractors = [x for x in options if x.casefold() != current_quiz["answer"].casefold()][:3]
-            quiz_options = [current_quiz["answer"]] + distractors
-            quiz_options = sorted(set(quiz_options), key=lambda value: value.casefold())
-            quiz_choice = st.radio("Complete the statement:", quiz_options, key=f"quiz_choice_{idx}")
-            if st.button("Check answer", key=f"quiz_check_{idx}", use_container_width=True):
-                st.session_state.quiz_answered += 1
-                quiz_topic = "General"
-                selected_doc_name = str(globals().get("selected_doc", [None, "General"])[1] if "selected_doc" in globals() and selected_doc else "General")
-                quiz_topic = selected_doc_name or "General"
-                is_correct = quiz_choice.casefold() == current_quiz["answer"].casefold()
-                save_learning_attempt(AUTH_ID, quiz_topic, current_quiz["question"], is_correct, source="Flashcards & Quiz")
-                if is_correct:
-                    st.session_state.quiz_score += 1
-                    st.success("Correct — nice work.")
-                else:
-                    save_learning_mistake(
-                        AUTH_ID, quiz_topic, current_quiz["question"], quiz_choice, current_quiz["answer"],
-                        "Review the original sentence and explain why the correct term fits the blank.",
+        quiz_bank = st.session_state.get("quiz_bank", [])
+        if quiz_bank:
+            quiz_by_card = {item["card_index"]: item for item in quiz_bank}
+            current_quiz = quiz_by_card.get(idx)
+            if current_quiz:
+                quiz_options = current_quiz["options"]
+                quiz_choice = st.radio(
+                    "Choose the best answer:",
+                    quiz_options,
+                    key=f"quiz_choice_{idx}",
+                )
+                if st.button("Check answer", key=f"quiz_check_{idx}", use_container_width=True):
+                    st.session_state.quiz_answered += 1
+                    is_correct = quiz_choice.casefold() == current_quiz["answer"].casefold()
+                    quiz_topic = "General"
+                    selected_doc_name = str(
+                        globals().get("selected_doc", [None, "General"])[1]
+                        if "selected_doc" in globals() and selected_doc
+                        else "General"
+                    )
+                    quiz_topic = selected_doc_name or "General"
+                    save_learning_attempt(
+                        AUTH_ID,
+                        quiz_topic,
+                        current_quiz["question"],
+                        is_correct,
                         source="Flashcards & Quiz",
                     )
-                    st.error(f"Not quite. The correct answer is {current_quiz['answer']}.")
-            st.caption(f"Quiz score: {st.session_state.quiz_score}/{st.session_state.quiz_answered or 0}")
+                    if is_correct:
+                        st.session_state.quiz_score += 1
+                        st.success("Correct — nice work.")
+                    else:
+                        save_learning_mistake(
+                            AUTH_ID,
+                            quiz_topic,
+                            current_quiz["question"],
+                            quiz_choice,
+                            current_quiz["answer"],
+                            "Review the original sentence and explain why the correct term fits the blank.",
+                            source="Flashcards & Quiz",
+                        )
+                        st.error(f"Not quite. The correct answer is {current_quiz['answer']}.")
+                st.caption(
+                    f"Quiz score: {st.session_state.quiz_score}/{st.session_state.quiz_answered or 0}"
+                )
+            else:
+                st.info("This card does not have enough distinct answer choices. Build the deck again from richer notes.")
         else:
-            st.info("Build a few more cards to enable the multiple-choice quiz.")
+            st.info("Build a deck with at least two distinct answer terms to enable the multiple-choice quiz.")
+
 
 elif st.session_state.page == 27:
     st.markdown('<div class="page-banner"><div class="page-title">🎯 Focus Mode</div><div class="page-sub">Work on one academic task at a time with a distraction-free session timer.</div></div>', unsafe_allow_html=True)
@@ -11093,6 +11268,7 @@ elif st.session_state.page == 41:
         else:
             st.session_state.voice_study_answer = call_gemini_agent(GLOBAL_GEMINI_API_KEY, 'You are StudySphere Voice Tutor. Use short spoken-friendly sentences and finish with three quick practice questions.\n\n' + request_text.strip())
     answer = st.session_state.get('voice_study_answer')
+    safe_answer = ""
     if answer:
         st.markdown(answer)
         safe_answer = json.dumps(re.sub(r'[*_`#]', '', answer[:12000]))
@@ -11117,7 +11293,7 @@ elif st.session_state.page == 41:
             </div>
             """, height=220)
 
-        if st_html is not None:
+        if st_html is not None and answer:
             st_html(f'''<div style="padding:12px;border:1px solid #D8E1EC;border-radius:14px;background:#FFFFFF;font-family:Arial,sans-serif;"><button id="speak" style="padding:10px 16px;border-radius:10px;border:1px solid #123D6A;background:#0B1F3A;color:white;font-weight:700;cursor:pointer;">🔊 Read aloud</button><button id="stop" style="padding:10px 16px;border-radius:10px;border:1px solid #D8E1EC;background:#F4F7FB;color:#0B1F3A;font-weight:700;cursor:pointer;margin-left:8px;">⏹ Stop</button><script>const text={safe_answer};document.getElementById('speak').onclick=()=>{{window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=.94;window.speechSynthesis.speak(u)}};document.getElementById('stop').onclick=()=>window.speechSynthesis.cancel();</script></div>''', height=74)
         else:
             st.info('Use your browser text-to-speech accessibility tools to hear the answer.')
