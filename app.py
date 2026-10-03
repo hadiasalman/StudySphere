@@ -2625,8 +2625,8 @@ footer { visibility:hidden; }
   padding:7px 10px !important;
   margin:2px 0 !important;
   border-radius:10px !important;
-  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
-  border:1.5px solid #2748B8 !important;
+  background:linear-gradient(135deg,#0B1F3A,#123B63) !important;
+  border:1.5px solid #1B3A5C !important;
   box-shadow:none !important;
   color:#FFFFFF !important;
   text-align:left !important;
@@ -2635,8 +2635,8 @@ footer { visibility:hidden; }
 }
 [data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button:hover {
   transform:translateX(3px) !important;
-  background:#3157D6 !important;
-  border-color:#2445B8 !important;
+  background:#123B63 !important;
+  border-color:#082A52 !important;
   box-shadow:0 5px 12px rgba(11,31,58,.06) !important;
 }
 [data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button p,
@@ -2646,8 +2646,8 @@ footer { visibility:hidden; }
   font-weight:750 !important;
 }
 .sidebar-nav-active div.stButton > button {
-  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
-  border-color:#2445B8 !important;
+  background:linear-gradient(135deg,#0B1F3A,#123B63) !important;
+  border-color:#082A52 !important;
   box-shadow:inset 3px 0 0 var(--ss-primary), 0 6px 14px rgba(11,31,58,.07) !important;
 }
 .sidebar-nav-active div.stButton > button p,
@@ -2678,12 +2678,12 @@ li { color:var(--ss-text) !important; }
 
 /* Buttons */
 div.stButton > button {
-  min-height:42px; border-radius:11px !important; background:linear-gradient(135deg,#4169E1,#3157D6) !important;
-  border:1px solid #2748B8 !important; color:#FFFFFF !important;
+  min-height:42px; border-radius:11px !important; background:linear-gradient(135deg,#0B1F3A,#123B63) !important;
+  border:1px solid #1B3A5C !important; color:#FFFFFF !important;
   font-weight:800; box-shadow:0 7px 18px rgba(11,31,58,.16); transition:transform .16s ease, background .16s ease, box-shadow .16s ease;
 }
 div.stButton > button:hover {
-  background:#3157D6 !important; transform:translateY(-1px); box-shadow:0 11px 24px rgba(11,31,58,.22);
+  background:#123B63 !important; transform:translateY(-1px); box-shadow:0 11px 24px rgba(11,31,58,.22);
 }
 div.stButton > button p, div.stButton > button span { color:#fff !important; }
 
@@ -2691,13 +2691,13 @@ div.stButton > button p, div.stButton > button span { color:#fff !important; }
 [data-testid="stDownloadButton"] > button {
   min-height:44px !important;
   border-radius:13px !important;
-  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
-  border:1px solid #2748B8 !important;
+  background:linear-gradient(135deg,#0B1F3A,#123B63) !important;
+  border:1px solid #1B3A5C !important;
   color:#FFFFFF !important;
   box-shadow:0 8px 18px rgba(11,31,58,.18) !important;
 }
 [data-testid="stDownloadButton"] > button:hover {
-  background:linear-gradient(135deg,#3157D6,#2445B8) !important;
+  background:linear-gradient(135deg,#123B63,#082A52) !important;
   transform:translateY(-1px) !important;
 }
 [data-testid="stDownloadButton"] > button p,
@@ -3088,7 +3088,7 @@ body div[data-baseweb="popover"] > div {
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; scroll-behavior:auto !important; } }
 
 </style>
-""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#4169E1").replace("__PRIMARY_HOVER__", "#3157D6").replace("__PRIMARY_SOFT__", "rgba(65,105,225,.12)" if not dark_mode else "rgba(65,105,225,.20)").replace("__ACCENT__", "#38BDF8" if not dark_mode else "#38BDF8").replace("__ACCENT_SOFT__", "rgba(56,189,248,.12)" if not dark_mode else "rgba(56,189,248,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
+""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#0B1F3A").replace("__PRIMARY_HOVER__", "#123B63").replace("__PRIMARY_SOFT__", "rgba(11,31,58,.12)" if not dark_mode else "rgba(11,31,58,.20)").replace("__ACCENT__", "#38BDF8" if not dark_mode else "#38BDF8").replace("__ACCENT_SOFT__", "rgba(56,189,248,.12)" if not dark_mode else "rgba(56,189,248,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
     unsafe_allow_html=True,
 )
 
@@ -3124,8 +3124,10 @@ control_bg = "#12243A" if st.session_state.dark_mode else "#FFFFFF"
 control_bg_hover = "#18314F" if st.session_state.dark_mode else "#F4F7FB"
 control_border = "#355373" if st.session_state.dark_mode else "#C9D5E3"
 control_text = "#F4F8FC" if st.session_state.dark_mode else "#172033"
-control_accent = "#4169E1"
-control_accent_hover = "#3157D6"
+control_accent = "#2F557A" if st.session_state.dark_mode else "#0B1F3A"
+control_accent_hover = "#3A648E" if st.session_state.dark_mode else "#123B63"
+control_border_accent = "#4A7298" if st.session_state.dark_mode else "#1B3A5C"
+control_border_hover = "#5B86AD" if st.session_state.dark_mode else "#061D36"
 button_text = "#000000" if st.session_state.dark_mode else "#FFFFFF"
 
 st.markdown(
@@ -3411,21 +3413,21 @@ st.markdown(
 )
 
 
-# Final Royal Blue button theme override. This is intentionally placed after the
+# Final Navy Blue button theme override. This is intentionally placed after the
 # earlier theme CSS so navigation, form, download, and dashboard buttons share
-# one consistent appearance in both Light and Dark modes.
+# one consistent appearance in both Light and Dark modes, including focus and active states.
 st.markdown(
     f"""
 <style>
-/* ===== ROYAL BLUE BUTTON SYSTEM ===== */
+/* ===== NAVY BLUE BUTTON SYSTEM ===== */
 .stButton > button,
 button[kind="primary"],
 button[kind="secondary"],
 [data-testid="stFormSubmitButton"] > button,
 [data-testid="stDownloadButton"] > button,
 [data-testid="stSidebar"] .stButton > button {{
-  background:linear-gradient(135deg,#4169E1 0%,#3157D6 100%) !important;
-  border:1.5px solid #2748B8 !important;
+  background:linear-gradient(135deg,{control_accent} 0%,{control_accent_hover} 100%) !important;
+  border:1.5px solid {control_border_accent} !important;
   color:{button_text} !important;
   border-radius:12px !important;
   font-weight:800 !important;
@@ -3438,12 +3440,45 @@ button[kind="secondary"]:hover,
 [data-testid="stFormSubmitButton"] > button:hover,
 [data-testid="stDownloadButton"] > button:hover,
 [data-testid="stSidebar"] .stButton > button:hover {{
-  background:linear-gradient(135deg,#3157D6 0%,#2445B8 100%) !important;
-  border-color:#1838A6 !important;
+  background:linear-gradient(135deg,{control_accent_hover} 0%,{control_border_hover} 100%) !important;
+  border-color:{control_border_hover} !important;
   color:{button_text} !important;
   transform:translateY(-1px) !important;
   box-shadow:0 11px 25px rgba(37,66,180,.24) !important;
 }}
+/* Keep clicked/focused/active buttons in the same navy palette. */
+.stButton > button:focus,
+.stButton > button:focus-visible,
+.stButton > button:active,
+button[kind="primary"]:focus,
+button[kind="primary"]:focus-visible,
+button[kind="primary"]:active,
+button[kind="secondary"]:focus,
+button[kind="secondary"]:focus-visible,
+button[kind="secondary"]:active,
+[data-testid="stFormSubmitButton"] > button:focus,
+[data-testid="stFormSubmitButton"] > button:focus-visible,
+[data-testid="stFormSubmitButton"] > button:active,
+[data-testid="stDownloadButton"] > button:focus,
+[data-testid="stDownloadButton"] > button:focus-visible,
+[data-testid="stDownloadButton"] > button:active,
+[data-testid="stSidebar"] .stButton > button:focus,
+[data-testid="stSidebar"] .stButton > button:focus-visible,
+[data-testid="stSidebar"] .stButton > button:active {
+  background:linear-gradient(135deg,{control_accent_hover} 0%,{control_accent} 100%) !important;
+  border-color:{control_border_hover} !important;
+  color:{button_text} !important;
+  box-shadow:0 0 0 2px rgba(56,189,248,.28), 0 9px 24px rgba(11,31,58,.20) !important;
+}
+.stButton > button:focus *,
+.stButton > button:focus-visible *,
+.stButton > button:active *,
+[data-testid="stSidebar"] .stButton > button:focus *,
+[data-testid="stSidebar"] .stButton > button:focus-visible *,
+[data-testid="stSidebar"] .stButton > button:active * {
+  color:{button_text} !important;
+}
+
 .stButton > button p,
 .stButton > button span,
 .stButton > button div,
@@ -3465,21 +3500,21 @@ button[kind="secondary"] div,
   color:{button_text} !important;
 }}
 
-/* Workspace navigation buttons get the same royal-blue treatment. */
+/* Workspace navigation buttons get the same navy-blue treatment. */
 [data-testid="stSidebar"] [data-testid="stExpander"] .stButton > button {{
-  background:linear-gradient(135deg,#4169E1 0%,#3157D6 100%) !important;
-  border:1.5px solid #2748B8 !important;
+  background:linear-gradient(135deg,{control_accent} 0%,{control_accent_hover} 100%) !important;
+  border:1.5px solid {control_border_accent} !important;
   color:{button_text} !important;
   min-height:40px !important;
   border-radius:11px !important;
 }}
 [data-testid="stSidebar"] [data-testid="stExpander"] .stButton > button:hover {{
-  background:linear-gradient(135deg,#3157D6 0%,#2445B8 100%) !important;
+  background:linear-gradient(135deg,{control_accent_hover} 0%,{control_border_hover} 100%) !important;
 }}
 .sidebar-nav-active div.stButton > button,
 .sidebar-nav-active div.stButton > button:hover {{
-  background:linear-gradient(135deg,#4169E1 0%,#2445B8 100%) !important;
-  border-color:#1838A6 !important;
+  background:linear-gradient(135deg,{control_accent} 0%,{control_border_hover} 100%) !important;
+  border-color:{control_border_hover} !important;
   color:{button_text} !important;
   box-shadow:inset 4px 0 0 #38BDF8, 0 9px 24px rgba(37,66,180,.24) !important;
 }}
@@ -3489,14 +3524,14 @@ button[kind="secondary"] div,
   font-weight:900 !important;
 }}
 
-/* The sidebar collapse arrow also stays within the Royal Blue brand system. */
+/* The sidebar collapse arrow also stays within the Navy Blue brand system. */
 [data-testid="stSidebarCollapseButton"] button svg,
 [data-testid="stSidebarCollapseButton"] button svg path,
 [data-testid="stSidebarCollapsedControl"] button svg,
 [data-testid="stSidebarCollapsedControl"] button svg path {{
-  color:#4169E1 !important;
-  fill:#4169E1 !important;
-  stroke:#4169E1 !important;
+  color:{control_accent} !important;
+  fill:#0B1F3A !important;
+  stroke:#0B1F3A !important;
 }}
 [data-testid="stSidebarCollapseButton"] button:hover svg,
 [data-testid="stSidebarCollapseButton"] button:hover svg path,
