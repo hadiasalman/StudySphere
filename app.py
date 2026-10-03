@@ -2625,29 +2625,29 @@ footer { visibility:hidden; }
   padding:7px 10px !important;
   margin:2px 0 !important;
   border-radius:10px !important;
-  background:transparent !important;
-  border:1px solid transparent !important;
+  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
+  border:1.5px solid #2748B8 !important;
   box-shadow:none !important;
-  color:var(--ss-text) !important;
+  color:#FFFFFF !important;
   text-align:left !important;
   justify-content:flex-start !important;
   transition:transform .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease !important;
 }
 [data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button:hover {
   transform:translateX(3px) !important;
-  background:var(--ss-surface-2) !important;
-  border-color:var(--ss-border) !important;
+  background:#3157D6 !important;
+  border-color:#2445B8 !important;
   box-shadow:0 5px 12px rgba(11,31,58,.06) !important;
 }
 [data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button p,
 [data-testid="stSidebar"] [data-testid="stExpander"] div.stButton > button span {
-  color:var(--ss-text) !important;
+  color:#FFFFFF !important;
   font-size:11px !important;
   font-weight:750 !important;
 }
 .sidebar-nav-active div.stButton > button {
-  background:linear-gradient(90deg,var(--ss-primary-soft),rgba(56,189,248,.07)) !important;
-  border-color:rgba(11,31,58,.24) !important;
+  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
+  border-color:#2445B8 !important;
   box-shadow:inset 3px 0 0 var(--ss-primary), 0 6px 14px rgba(11,31,58,.07) !important;
 }
 .sidebar-nav-active div.stButton > button p,
@@ -2678,12 +2678,12 @@ li { color:var(--ss-text) !important; }
 
 /* Buttons */
 div.stButton > button {
-  min-height:42px; border-radius:11px !important; background:var(--ss-primary) !important;
-  border:1px solid var(--ss-primary-hover) !important; color:#fff !important;
+  min-height:42px; border-radius:11px !important; background:linear-gradient(135deg,#4169E1,#3157D6) !important;
+  border:1px solid #2748B8 !important; color:#FFFFFF !important;
   font-weight:800; box-shadow:0 7px 18px rgba(11,31,58,.16); transition:transform .16s ease, background .16s ease, box-shadow .16s ease;
 }
 div.stButton > button:hover {
-  background:var(--ss-primary-hover) !important; transform:translateY(-1px); box-shadow:0 11px 24px rgba(11,31,58,.22);
+  background:#3157D6 !important; transform:translateY(-1px); box-shadow:0 11px 24px rgba(11,31,58,.22);
 }
 div.stButton > button p, div.stButton > button span { color:#fff !important; }
 
@@ -2691,13 +2691,13 @@ div.stButton > button p, div.stButton > button span { color:#fff !important; }
 [data-testid="stDownloadButton"] > button {
   min-height:44px !important;
   border-radius:13px !important;
-  background:linear-gradient(135deg,#0B1F3A,#123D6A) !important;
-  border:1px solid #08182D !important;
+  background:linear-gradient(135deg,#4169E1,#3157D6) !important;
+  border:1px solid #2748B8 !important;
   color:#FFFFFF !important;
   box-shadow:0 8px 18px rgba(11,31,58,.18) !important;
 }
 [data-testid="stDownloadButton"] > button:hover {
-  background:linear-gradient(135deg,#123D6A,#08182D) !important;
+  background:linear-gradient(135deg,#3157D6,#2445B8) !important;
   transform:translateY(-1px) !important;
 }
 [data-testid="stDownloadButton"] > button p,
@@ -3088,7 +3088,7 @@ body div[data-baseweb="popover"] > div {
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; scroll-behavior:auto !important; } }
 
 </style>
-""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#0B1F3A" if not dark_mode else "#163A63").replace("__PRIMARY_HOVER__", "#123D6A" if not dark_mode else "#1D4F80").replace("__PRIMARY_SOFT__", "rgba(11,31,58,.10)" if not dark_mode else "rgba(56,189,248,.14)").replace("__ACCENT__", "#38BDF8" if not dark_mode else "#38BDF8").replace("__ACCENT_SOFT__", "rgba(56,189,248,.12)" if not dark_mode else "rgba(56,189,248,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
+""".replace("__BG__", bg).replace("__CARD__", card).replace("__CARD2__", card2).replace("__TEXT__", text).replace("__MUTED__", muted).replace("__BORDER__", border).replace("__SHADOW__", shadow).replace("__PRIMARY__", "#4169E1").replace("__PRIMARY_HOVER__", "#3157D6").replace("__PRIMARY_SOFT__", "rgba(65,105,225,.12)" if not dark_mode else "rgba(65,105,225,.20)").replace("__ACCENT__", "#38BDF8" if not dark_mode else "#38BDF8").replace("__ACCENT_SOFT__", "rgba(56,189,248,.12)" if not dark_mode else "rgba(56,189,248,.13)").replace("var(--primary-soft)", "var(--ss-primary-soft)"),
     unsafe_allow_html=True,
 )
 
@@ -3124,8 +3124,9 @@ control_bg = "#12243A" if st.session_state.dark_mode else "#FFFFFF"
 control_bg_hover = "#18314F" if st.session_state.dark_mode else "#F4F7FB"
 control_border = "#355373" if st.session_state.dark_mode else "#C9D5E3"
 control_text = "#F4F8FC" if st.session_state.dark_mode else "#172033"
-control_accent = "#123D6A" if st.session_state.dark_mode else "#0B1F3A"
-control_accent_hover = "#38BDF8" if st.session_state.dark_mode else "#123D6A"
+control_accent = "#4169E1"
+control_accent_hover = "#3157D6"
+button_text = "#000000" if st.session_state.dark_mode else "#FFFFFF"
 
 st.markdown(
     f"""
@@ -3404,6 +3405,107 @@ st.markdown(
     transition:none !important;
   }
 }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# Final Royal Blue button theme override. This is intentionally placed after the
+# earlier theme CSS so navigation, form, download, and dashboard buttons share
+# one consistent appearance in both Light and Dark modes.
+st.markdown(
+    f"""
+<style>
+/* ===== ROYAL BLUE BUTTON SYSTEM ===== */
+.stButton > button,
+button[kind="primary"],
+button[kind="secondary"],
+[data-testid="stFormSubmitButton"] > button,
+[data-testid="stDownloadButton"] > button,
+[data-testid="stSidebar"] .stButton > button {{
+  background:linear-gradient(135deg,#4169E1 0%,#3157D6 100%) !important;
+  border:1.5px solid #2748B8 !important;
+  color:{button_text} !important;
+  border-radius:12px !important;
+  font-weight:800 !important;
+  box-shadow:0 8px 20px rgba(37,66,180,.18) !important;
+  transition:transform .16s ease, background .16s ease, box-shadow .16s ease, border-color .16s ease !important;
+}}
+.stButton > button:hover,
+button[kind="primary"]:hover,
+button[kind="secondary"]:hover,
+[data-testid="stFormSubmitButton"] > button:hover,
+[data-testid="stDownloadButton"] > button:hover,
+[data-testid="stSidebar"] .stButton > button:hover {{
+  background:linear-gradient(135deg,#3157D6 0%,#2445B8 100%) !important;
+  border-color:#1838A6 !important;
+  color:{button_text} !important;
+  transform:translateY(-1px) !important;
+  box-shadow:0 11px 25px rgba(37,66,180,.24) !important;
+}}
+.stButton > button p,
+.stButton > button span,
+.stButton > button div,
+button[kind="primary"] p,
+button[kind="primary"] span,
+button[kind="primary"] div,
+button[kind="secondary"] p,
+button[kind="secondary"] span,
+button[kind="secondary"] div,
+[data-testid="stFormSubmitButton"] > button p,
+[data-testid="stFormSubmitButton"] > button span,
+[data-testid="stFormSubmitButton"] > button div,
+[data-testid="stDownloadButton"] > button p,
+[data-testid="stDownloadButton"] > button span,
+[data-testid="stDownloadButton"] > button div,
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button span,
+[data-testid="stSidebar"] .stButton > button div {{
+  color:{button_text} !important;
+}}
+
+/* Workspace navigation buttons get the same royal-blue treatment. */
+[data-testid="stSidebar"] [data-testid="stExpander"] .stButton > button {{
+  background:linear-gradient(135deg,#4169E1 0%,#3157D6 100%) !important;
+  border:1.5px solid #2748B8 !important;
+  color:{button_text} !important;
+  min-height:40px !important;
+  border-radius:11px !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] .stButton > button:hover {{
+  background:linear-gradient(135deg,#3157D6 0%,#2445B8 100%) !important;
+}}
+.sidebar-nav-active div.stButton > button,
+.sidebar-nav-active div.stButton > button:hover {{
+  background:linear-gradient(135deg,#4169E1 0%,#2445B8 100%) !important;
+  border-color:#1838A6 !important;
+  color:{button_text} !important;
+  box-shadow:inset 4px 0 0 #38BDF8, 0 9px 24px rgba(37,66,180,.24) !important;
+}}
+.sidebar-nav-active div.stButton > button p,
+.sidebar-nav-active div.stButton > button span {{
+  color:{button_text} !important;
+  font-weight:900 !important;
+}}
+
+/* The sidebar collapse arrow also stays within the Royal Blue brand system. */
+[data-testid="stSidebarCollapseButton"] button svg,
+[data-testid="stSidebarCollapseButton"] button svg path,
+[data-testid="stSidebarCollapsedControl"] button svg,
+[data-testid="stSidebarCollapsedControl"] button svg path {{
+  color:#4169E1 !important;
+  fill:#4169E1 !important;
+  stroke:#4169E1 !important;
+}}
+[data-testid="stSidebarCollapseButton"] button:hover svg,
+[data-testid="stSidebarCollapseButton"] button:hover svg path,
+[data-testid="stSidebarCollapsedControl"] button:hover svg,
+[data-testid="stSidebarCollapsedControl"] button:hover svg path {{
+  color:#38BDF8 !important;
+  fill:#38BDF8 !important;
+  stroke:#38BDF8 !important;
+}}
 </style>
 """,
     unsafe_allow_html=True,
