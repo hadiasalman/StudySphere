@@ -3582,6 +3582,52 @@ button[kind="secondary"] div,
 )
 
 
+
+
+# ===== Sidebar workspace expander contrast fix =====
+st.markdown(
+    f"""
+<style>
+/* Keep Workspace category headers readable in both themes. */
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary > div,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary > div > span,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary span {{
+  background:{card} !important;
+  color:{text} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover > div,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover > div > span {{
+  background:{card2} !important;
+  color:{text} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary > div,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary > div > span,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary span {{
+  background:{card} !important;
+  color:{control_accent} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg path {{
+  color:{text} !important;
+  fill:{text} !important;
+  stroke:{text} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary svg path {{
+  color:{control_accent} !important;
+  fill:{control_accent} !important;
+  stroke:{control_accent} !important;
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 # ============================================================
 # LOCAL AUTHENTICATION HELPERS
 # ============================================================
