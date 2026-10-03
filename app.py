@@ -3258,15 +3258,15 @@ st.markdown(
     """
 <style>
 /* Workspace is presented as a clean, sequential button stack rather than a bullet list. */
-[data-testid="stSidebar"] [role="radiogroup"] {
+[data-testid="stSidebar"] [role="radiogroup"] {{
   display:flex !important;
   flex-direction:column !important;
   gap:9px !important;
   margin:8px 0 4px !important;
   padding:2px !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label {
+[data-testid="stSidebar"] [role="radiogroup"] label {{
   position:relative !important;
   display:flex !important;
   align-items:center !important;
@@ -3288,22 +3288,22 @@ st.markdown(
     border-color .18s ease,
     box-shadow .18s ease,
     background .18s ease !important;
-}
+}}
 
 /* Remove the native radio bullet. */
 [data-testid="stSidebar"] [role="radiogroup"] label input,
-[data-testid="stSidebar"] [role="radiogroup"] [role="radio"] {
+[data-testid="stSidebar"] [role="radiogroup"] [role="radio"] {{
   opacity:0 !important;
   width:0 !important;
   height:0 !important;
   margin:0 !important;
   pointer-events:none !important;
   position:absolute !important;
-}
+}}
 
 /* Number badge gives every Workspace item a clear visual sequence. */
 [data-testid="stSidebar"] [role="radiogroup"] label p,
-[data-testid="stSidebar"] [role="radiogroup"] label span {
+[data-testid="stSidebar"] [role="radiogroup"] label span {{
   position:relative !important;
   z-index:3 !important;
   margin:0 !important;
@@ -3314,14 +3314,14 @@ st.markdown(
   letter-spacing:.05px !important;
   white-space:nowrap !important;
   transition:color .18s ease, transform .18s ease !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label p::first-letter {
+[data-testid="stSidebar"] [role="radiogroup"] label p::first-letter {{
   font-weight:900 !important;
-}
+}}
 
 /* Elegant moving shine across each outlined button. */
-[data-testid="stSidebar"] [role="radiogroup"] label::before {
+[data-testid="stSidebar"] [role="radiogroup"] label::before {{
   content:"" !important;
   position:absolute !important;
   top:-45% !important;
@@ -3333,30 +3333,30 @@ st.markdown(
   transition:left .6s ease !important;
   pointer-events:none !important;
   z-index:1 !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label:hover::before {
+[data-testid="stSidebar"] [role="radiogroup"] label:hover::before {{
   left:130% !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {{
   transform:translateX(3px) !important;
   border-color:rgba(22,58,99,.52) !important;
   box-shadow:
     0 7px 18px rgba(11,31,58,.10),
     inset 0 0 0 1px rgba(11,31,58,.08) !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label:active {
+[data-testid="stSidebar"] [role="radiogroup"] label:active {{
   transform:translateX(2px) scale(.985) !important;
-}
+}}
 
-[data-testid="stSidebar"] [role="radiogroup"] label > div {
+[data-testid="stSidebar"] [role="radiogroup"] label > div {{
   width:100% !important;
-}
+}}
 
 /* Selected button gets a clean outline and a compact active marker. */
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] {{
   background:linear-gradient(135deg,rgba(22,58,99,.13),rgba(56,189,248,.07)) !important;
   border-color:var(--ss-primary) !important;
   box-shadow:
@@ -3364,17 +3364,17 @@ st.markdown(
     0 8px 20px rgba(11,31,58,.12) !important;
   transform:translateX(2px) !important;
   animation:ssWorkspaceSelected .35s ease-out !important;
-}
+}}
 
 [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] p,
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span {
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"] span {{
   color:var(--ss-primary) !important;
   font-weight:860 !important;
   transform:translateX(2px) !important;
-}
+}}
 
 /* Active indicator at the right edge. */
-[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {
+[data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {{
   content:"→" !important;
   position:absolute !important;
   right:12px !important;
@@ -3387,26 +3387,26 @@ st.markdown(
   opacity:.95 !important;
   z-index:4 !important;
   animation:ssWorkspaceArrow 1.1s ease-in-out infinite !important;
-}
+}}
 
-@keyframes ssWorkspaceSelected {
-  0% { transform:translateX(0) scale(.985); opacity:.76; }
-  100% { transform:translateX(2px) scale(1); opacity:1; }
-}
+@keyframes ssWorkspaceSelected {{
+  0% {{ transform:translateX(0) scale(.985); opacity:.76; }}
+  100% {{ transform:translateX(2px) scale(1); opacity:1; }}
+}}
 
-@keyframes ssWorkspaceArrow {
-  0%,100% { transform:translateY(-50%) translateX(0); }
-  50% { transform:translateY(-50%) translateX(3px); }
-}
+@keyframes ssWorkspaceArrow {{
+  0%,100% {{ transform:translateY(-50%) translateX(0); }}
+  50% {{ transform:translateY(-50%) translateX(3px); }}
+}}
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce) {{
   [data-testid="stSidebar"] [role="radiogroup"] label,
   [data-testid="stSidebar"] [role="radiogroup"] label::before,
-  [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {
+  [data-testid="stSidebar"] [role="radiogroup"] label[data-checked="true"]::after {{
     animation:none !important;
     transition:none !important;
-  }
-}
+  }}
+}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -3464,20 +3464,20 @@ button[kind="secondary"]:active,
 [data-testid="stDownloadButton"] > button:active,
 [data-testid="stSidebar"] .stButton > button:focus,
 [data-testid="stSidebar"] .stButton > button:focus-visible,
-[data-testid="stSidebar"] .stButton > button:active {
+[data-testid="stSidebar"] .stButton > button:active {{
   background:linear-gradient(135deg,{control_accent_hover} 0%,{control_accent} 100%) !important;
   border-color:{control_border_hover} !important;
   color:{button_text} !important;
   box-shadow:0 0 0 2px rgba(56,189,248,.28), 0 9px 24px rgba(11,31,58,.20) !important;
-}
+}}
 .stButton > button:focus *,
 .stButton > button:focus-visible *,
 .stButton > button:active *,
 [data-testid="stSidebar"] .stButton > button:focus *,
 [data-testid="stSidebar"] .stButton > button:focus-visible *,
-[data-testid="stSidebar"] .stButton > button:active * {
+[data-testid="stSidebar"] .stButton > button:active * {{
   color:{button_text} !important;
-}
+}}
 
 .stButton > button p,
 .stButton > button span,
