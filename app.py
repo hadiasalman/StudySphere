@@ -17,7 +17,6 @@ import csv
 import sqlite3
 import uuid
 import zipfile
-import html
 from pathlib import Path
 from collections import Counter
 from datetime import date, datetime
@@ -3305,48 +3304,6 @@ input, textarea,
 st.markdown(
     """
 <style>
-/* Native browser-history navigation links. These intentionally use
-   normal <a href> navigation so Back/Forward are controlled by Chrome/Edge. */
-[data-testid="stSidebar"] .ss-workspace-link {
-  position:relative !important;
-  display:flex !important;
-  align-items:center !important;
-  width:100% !important;
-  min-height:46px !important;
-  box-sizing:border-box !important;
-  margin:0 0 9px 0 !important;
-  padding:8px 14px 8px 13px !important;
-  border:1.5px solid rgba(22,58,99,.22) !important;
-  border-radius:13px !important;
-  background:linear-gradient(180deg,var(--ss-surface),var(--ss-surface-2)) !important;
-  box-shadow:0 2px 7px rgba(15,23,42,.035), inset 0 0 0 1px rgba(255,255,255,.22) !important;
-  overflow:hidden !important;
-  cursor:pointer !important;
-  color:var(--ss-text) !important;
-  font-size:12px !important;
-  font-weight:760 !important;
-  line-height:1.25 !important;
-  letter-spacing:.05px !important;
-  text-decoration:none !important;
-  white-space:nowrap !important;
-  transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,background .18s ease,color .18s ease !important;
-}
-[data-testid="stSidebar"] .ss-workspace-link:hover {
-  transform:translateX(3px) !important;
-  border-color:rgba(22,58,99,.52) !important;
-  box-shadow:0 7px 18px rgba(11,31,58,.10),inset 0 0 0 1px rgba(11,31,58,.08) !important;
-  color:var(--ss-primary) !important;
-  text-decoration:none !important;
-}
-[data-testid="stSidebar"] .ss-workspace-link.ss-workspace-active {
-  background:linear-gradient(135deg,rgba(22,58,99,.13),rgba(56,189,248,.07)) !important;
-  border-color:var(--ss-primary) !important;
-  box-shadow:inset 4px 0 0 var(--ss-primary),0 8px 20px rgba(11,31,58,.12) !important;
-  color:var(--ss-primary) !important;
-  font-weight:860 !important;
-  transform:translateX(2px) !important;
-}
-
 /* Workspace is presented as a clean, sequential button stack rather than a bullet list. */
 [data-testid="stSidebar"] [role="radiogroup"] {{
   display:flex !important;
@@ -7796,29 +7753,17 @@ for _category_title, _items in workspace_categories:
 # widget keys.
 
 def _workspace_button(page_id, label, key_suffix):
-    """Render internal navigation as a real browser link.
-
-    Using a native <a href> is intentional here: Chrome/Edge then owns the
-    history stack, so Back/Forward changes the StudySphere URL and the app
-    reconstructs the matching page from st.query_params on the next load.
-    """
-    if label == "＋  New chat":
-        button_key = "workspace_new_chat"
-        clicked = st.button("＋  New chat", key=button_key, use_container_width=True)
-        if clicked:
+    is_active = st.session_state.page == page_id and label != "＋  New chat"
+    button_key = "workspace_new_chat" if label == "＋  New chat" else f"workspace_nav_{page_id}"
+    display_label = ("●  " if is_active else "   ") + label
+    clicked = st.button(display_label, key=button_key, use_container_width=True)
+    if clicked:
+        if label == "＋  New chat":
             st.session_state.active_chat_id = create_chat_session(AUTH_ID)
             st.session_state.ai_messages = []
             _navigate_to_page(8)
-        return
-
-    is_active = st.session_state.page == page_id
-    display_label = ("●  " if is_active else "   ") + label
-    safe_label = html.escape(display_label)
-    active_class = " ss-workspace-active" if is_active else ""
-    st.markdown(
-        f'<a class="ss-workspace-link{active_class}" href="?page={int(page_id)}">{safe_label}</a>',
-        unsafe_allow_html=True,
-    )
+        else:
+            _navigate_to_page(page_id)
 
 # Use stable keys derived from page IDs. This keeps Streamlit widget state
 # predictable across role changes and category expansion/collapse.
