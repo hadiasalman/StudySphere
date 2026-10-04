@@ -102,6 +102,51 @@ if "dark_mode" not in st.session_state:
 if "page" not in st.session_state:
     st.session_state.page = 1
 
+
+# ============================================================
+# BROWSER BACK/FORWARD NAVIGATION
+# ============================================================
+# Streamlit session_state keeps the current page inside the app, but it does
+# not by itself create browser history entries. Mirror internal page changes
+# into ?page=... so Chrome/Edge Back can return to the previous StudySphere
+# page instead of leaving the app. Browser Back changes the query parameter,
+# which Streamlit then uses to restore the matching page state.
+# ============================================================
+
+_VALID_NAVIGATION_PAGES = set(range(1, 42))
+
+
+def _page_from_browser_url():
+    try:
+        raw_page = st.query_params.get("page")
+    except Exception:
+        raw_page = None
+    if raw_page in (None, ""):
+        return None
+    try:
+        page_id = int(str(raw_page).strip())
+    except (TypeError, ValueError):
+        return None
+    return page_id if page_id in _VALID_NAVIGATION_PAGES else None
+
+
+def _navigate_to_page(page_id):
+    """Navigate internally and create one browser-history entry."""
+    page_id = int(page_id)
+    if page_id not in _VALID_NAVIGATION_PAGES:
+        page_id = 1
+    st.session_state.page = page_id
+    try:
+        if str(st.query_params.get("page", "")) != str(page_id):
+            st.query_params["page"] = str(page_id)
+    except Exception:
+        pass
+    st.rerun()
+
+
+_browser_page = _page_from_browser_url()
+st.session_state.page = _browser_page if _browser_page is not None else 1
+
 if "show_login" not in st.session_state:
     st.session_state.show_login = "Sign in"
 
@@ -5581,8 +5626,7 @@ def render_chat_history_sidebar(user_id):
         button_label = ("● " if is_active else "  ") + label
         if st.sidebar.button(button_label, key=f"chat_history_{session_id}", use_container_width=True):
             st.session_state.active_chat_id = session_id
-            st.session_state.page = 8
-            st.rerun()
+            _navigate_to_page(8)
 
 def build_agent_context(auth_id):
     profile = cursor.execute(
@@ -6761,6 +6805,10 @@ def clear_authenticated_user():
     st.session_state.ai_messages = []
     st.session_state.active_chat_id = None
     st.session_state.page = 1
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
 
 
 def current_user_from_session():
@@ -7713,10 +7761,9 @@ def _workspace_button(page_id, label, key_suffix):
         if label == "＋  New chat":
             st.session_state.active_chat_id = create_chat_session(AUTH_ID)
             st.session_state.ai_messages = []
-            st.session_state.page = 8
+            _navigate_to_page(8)
         else:
-            st.session_state.page = page_id
-        st.rerun()
+            _navigate_to_page(page_id)
 
 # Use stable keys derived from page IDs. This keeps Streamlit widget state
 # predictable across role changes and category expansion/collapse.
@@ -7734,45 +7781,32 @@ st.sidebar.caption(f"{role_display} workspace • {institution_name(INSTITUTION_
 # Legacy hard-page guards remain below the navigation so direct state changes
 # and old saved sessions still respect role permissions.
 if st.session_state.page == 11 and not has_permission("manage_users"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 12 and not has_permission("manage_faculty_courses"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 15 and not has_permission("use_faculty_ai"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 13 and not has_permission("manage_university"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 16 and not has_permission("use_ai_agent"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 20 and st.session_state.user_role != "student":
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 21 and st.session_state.user_role != "student":
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page in {32, 33, 34, 35, 36, 37, 38, 39, 40, 41} and st.session_state.user_role != "student":
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 for _student_only_page in (24, 25, 26, 27, 28, 29, 30, 31):
     if st.session_state.page == _student_only_page and st.session_state.user_role != "student":
-        st.session_state.page = 1
-        st.rerun()
+        _navigate_to_page(1)
 if st.session_state.page == 22 and not has_permission("manage_university"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 17 and not has_permission("manage_university"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 18 and not has_permission("manage_university"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 if st.session_state.page == 19 and not (st.session_state.is_admin and st.session_state.user_role == "creator"):
-    st.session_state.page = 1
-    st.rerun()
+    _navigate_to_page(1)
 
 # Theme is now controlled from the dashboard top-right.
 
@@ -7899,17 +7933,13 @@ if st.session_state.page == 1:
     st.markdown('</div></div>', unsafe_allow_html=True)
 
     if go_ai:
-        st.session_state.page = 8
-        st.rerun()
+        _navigate_to_page(8)
     if go_subjects:
-        st.session_state.page = 2
-        st.rerun()
+        _navigate_to_page(2)
     if go_exams:
-        st.session_state.page = 4
-        st.rerun()
+        _navigate_to_page(4)
     if go_planner:
-        st.session_state.page = 5
-        st.rerun()
+        _navigate_to_page(5)
 
     st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Today at a glance</div><div class="section-sub">A focused view of the work that matters most right now.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
     focus_html = '<div class="focus-card"><div class="panel-title">🔥 Priority queue</div><div class="panel-sub">Unfinished study tasks sorted by priority.</div>'
@@ -7965,14 +7995,11 @@ if st.session_state.page == 1:
     smart_gpa = smart_b.button("📈 Calculate GPA", key="dashboard_gpa", use_container_width=True)
     smart_focus = smart_c.button("🎯 Start Focus Mode", key="dashboard_focus", use_container_width=True)
     if smart_exam:
-        st.session_state.page = 24
-        st.rerun()
+        _navigate_to_page(24)
     if smart_gpa:
-        st.session_state.page = 25
-        st.rerun()
+        _navigate_to_page(25)
     if smart_focus:
-        st.session_state.page = 27
-        st.rerun()
+        _navigate_to_page(27)
 
     st.markdown('<div class="dashboard-section"><div class="section-head"><div><div class="section-title">Deadline radar</div><div class="section-sub">Your nearest saved assignments and exams.</div></div></div><div class="dashboard-grid-2">', unsafe_allow_html=True)
 
@@ -8052,18 +8079,15 @@ if st.session_state.page == 1:
         st.markdown('<div class="dashboard-empty">No active academic notifications right now.</div>', unsafe_allow_html=True)
     notify_cols = st.columns(2)
     if notify_cols[0].button("🔔 Open Notifications", key="dashboard_notifications", use_container_width=True):
-        st.session_state.page = 28
-        st.rerun()
+        _navigate_to_page(28)
     if notify_cols[1].button("📈 Open My Progress", key="dashboard_progress", use_container_width=True):
-        st.session_state.page = 30
-        st.rerun()
+        _navigate_to_page(30)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="ai-cta"><div class="ai-cta-copy"><div class="ai-cta-title">🤖 StudySphere AI is ready</div><div class="ai-cta-sub">Ask naturally, let the agent inspect your records and notes, or ask it to perform StudySphere actions such as creating and updating academic records.</div></div><div class="ai-cta-badge">Agentic • Gemini powered</div></div>', unsafe_allow_html=True)
     open_ai = st.button("Open AI Agent", key="dashboard_open_ai", use_container_width=True)
     if open_ai:
-        st.session_state.page = 8
-        st.rerun()
+        _navigate_to_page(8)
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.page == 2:
@@ -8299,15 +8323,12 @@ elif st.session_state.page == 6:
 
     kb1, kb2, kb3 = st.columns(3)
     if kb1.button("🤖 Ask Agent about my notes", key="kb_ask_agent", use_container_width=True):
-        st.session_state.page = 8
         st.session_state.agent_command_text = "Search my uploaded notes and explain the most important topics I should revise."
-        st.rerun()
+        _navigate_to_page(8)
     if kb2.button("🗂️ Build flashcards", key="kb_flashcards", use_container_width=True):
-        st.session_state.page = 26
-        st.rerun()
+        _navigate_to_page(26)
     if kb3.button("🧠 Open Exam Preparation", key="kb_exam_prep", use_container_width=True):
-        st.session_state.page = 24
-        st.rerun()
+        _navigate_to_page(24)
 
     st.markdown('<div class="ai-panel"><div class="ai-badge">Agent tools + RAG</div><div class="ai-title">🧠 StudySphere Agent can retrieve and act</div><div class="ai-text">The Agent can search your uploaded documents and authorized university material, inspect your academic records, and execute safe StudySphere actions such as creating subjects, exams, assignments, and study tasks when you explicitly ask.</div></div>', unsafe_allow_html=True)
 
@@ -8881,8 +8902,7 @@ elif st.session_state.page == 14:
             st.write(f"**Credits:** {selected_course[5] or '—'}")
             st.write(f"**Description:** {selected_course[6] or 'No description provided.'}")
             if st.button("🤖 Ask AI about this course", key=f"my_university_ai_{selected_course_id}", use_container_width=True):
-                st.session_state.page = 8
-                st.rerun()
+                _navigate_to_page(8)
 
         with right_course:
             st.markdown('<div class="panel"><div class="panel-title">📚 Authorized course material</div><div class="panel-sub">Only material attached to this course is visible here and available to enrolled users through grounded retrieval.</div></div>', unsafe_allow_html=True)
@@ -10626,8 +10646,7 @@ elif st.session_state.page == 24:
     if not exam_rows:
         st.markdown('<div class="panel"><div class="panel-title">📅 No upcoming exams yet</div><div class="panel-sub">Add an exam from the Exams page and StudySphere will turn it into a preparation workspace.</div></div>', unsafe_allow_html=True)
         if st.button("📅 Add an exam", key="exam_prep_add_exam", use_container_width=True):
-            st.session_state.page = 4
-            st.rerun()
+            _navigate_to_page(4)
     else:
         exam_labels = [f"{row[1]} • {row[6] or 'General'} • {row[2]}" for row in exam_rows]
         selected_exam_label = st.selectbox("Choose an exam", exam_labels, key="exam_prep_selector")
@@ -10693,8 +10712,7 @@ elif st.session_state.page == 24:
             st.success("Today's exam-prep task was added to your Study Planner.")
             st.rerun()
         if open_exam_agent:
-            st.session_state.page = 8
-            st.rerun()
+            _navigate_to_page(8)
 
 elif st.session_state.page == 25:
     st.markdown('<div class="page-banner"><div class="page-title">📈 Grades & GPA</div><div class="page-sub">Calculate semester GPA, project your cumulative GPA, and work out what average you need for a target.</div></div>', unsafe_allow_html=True)
@@ -10755,8 +10773,7 @@ elif st.session_state.page == 26:
         if not documents:
             st.info("Upload a PDF, DOCX, TXT, or Markdown note from the Documents page first.")
             if st.button("📄 Open Documents", key="flashcards_open_documents", use_container_width=True):
-                st.session_state.page = 6
-                st.rerun()
+                _navigate_to_page(6)
         else:
             labels = [f"{row[1]} • {row[2].upper()}" for row in documents]
             selected_label = st.selectbox("Choose a document", labels, key="flashcard_document_selector")
@@ -10962,11 +10979,11 @@ elif st.session_state.page == 29:
     st.markdown('<div class="panel" style="margin-top:20px;"><div class="panel-title">How these signals work</div><div class="panel-sub">StudySphere does not hide a score behind the labels. Each signal is derived from a specific stored count or calculation, such as overdue assignments, open tasks, recorded attendance, or days until the nearest exam.</div></div>', unsafe_allow_html=True)
     a1, a2, a3 = st.columns(3)
     if a1.button("🧠 Exam Preparation", key="insights_exam_prep", use_container_width=True):
-        st.session_state.page = 24; st.rerun()
+        _navigate_to_page(24)
     if a2.button("🎯 Focus Mode", key="insights_focus", use_container_width=True):
-        st.session_state.page = 27; st.rerun()
+        _navigate_to_page(27)
     if a3.button("📈 My Progress", key="insights_progress", use_container_width=True):
-        st.session_state.page = 30; st.rerun()
+        _navigate_to_page(30)
 
 elif st.session_state.page == 30:
     st.markdown('<div class="page-banner"><div class="page-title">📈 My Progress</div><div class="page-sub">A personal academic snapshot built from your StudySphere activity.</div></div>', unsafe_allow_html=True)
@@ -11110,8 +11127,7 @@ elif st.session_state.page == 33:
 
     b1, b2 = st.columns(2)
     if b1.button("🎯 Open Exam Preparation", key="adaptive_open_exam_prep", use_container_width=True):
-        st.session_state.page = 24
-        st.rerun()
+        _navigate_to_page(24)
     b2.download_button("📥 Export learning history", data=student_learning_export_csv(AUTH_ID), file_name="studysphere_learning_history.csv", mime="text/csv", use_container_width=True, key="export_learning_history")
 
 elif st.session_state.page == 34:
