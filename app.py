@@ -3536,6 +3536,33 @@ button[kind="secondary"] div,
   color:{button_text} !important;
 }}
 
+/* Keep Workspace category panels navy blue when closed or opened.
+   Streamlit/BaseWeb can inject a white surface on the expander summary;
+   explicitly override that surface so it never flashes or stays white. */
+[data-testid="stSidebar"] [data-testid="stExpander"],
+[data-testid="stSidebar"] [data-testid="stExpander"] details,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] .streamlit-expanderContent {{
+  background:#0B1F3A !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary span {{
+  color:#FFFFFF !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover {{
+  background:#123B63 !important;
+  color:#FFFFFF !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg path {{
+  color:#FFFFFF !important;
+  fill:#FFFFFF !important;
+  stroke:#FFFFFF !important;
+}}
+
 /* Workspace navigation buttons get the same navy-blue treatment. */
 [data-testid="stSidebar"] [data-testid="stExpander"] .stButton > button {{
   background:linear-gradient(135deg,{control_accent} 0%,{control_accent_hover} 100%) !important;
