@@ -188,6 +188,8 @@ if "quiz_answered" not in st.session_state:
     st.session_state.quiz_answered = 0
 if "agent_command_text" not in st.session_state:
     st.session_state.agent_command_text = ""
+if "_clear_agent_command_text" not in st.session_state:
+    st.session_state._clear_agent_command_text = False
 if "multimodal_tutor_result" not in st.session_state:
     st.session_state.multimodal_tutor_result = ""
 if "multimodal_tutor_image_name" not in st.session_state:
@@ -3581,52 +3583,6 @@ button[kind="secondary"] div,
     unsafe_allow_html=True,
 )
 
-
-
-
-# ===== Sidebar workspace expander contrast fix =====
-st.markdown(
-    f"""
-<style>
-/* Keep Workspace category headers readable in both themes. */
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary > div,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary > div > span,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary p,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary span {{
-  background:{card} !important;
-  color:{text} !important;
-}}
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover > div,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary:hover > div > span {{
-  background:{card2} !important;
-  color:{text} !important;
-}}
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary,
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary > div,
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary > div > span,
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary p,
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary span {{
-  background:{card} !important;
-  color:{control_accent} !important;
-}}
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg,
-[data-testid="stSidebar"] [data-testid="stExpander"] details > summary svg path {{
-  color:{text} !important;
-  fill:{text} !important;
-  stroke:{text} !important;
-}}
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary svg,
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary svg path {{
-  color:{control_accent} !important;
-  fill:{control_accent} !important;
-  stroke:{control_accent} !important;
-}}
-</style>
-""",
-    unsafe_allow_html=True,
-)
 
 # ============================================================
 # LOCAL AUTHENTICATION HELPERS
@@ -8427,7 +8383,20 @@ elif st.session_state.page == 8:
         if col.button(label, key=f"agent_quick_{label}", use_container_width=True):
             st.session_state.agent_command_text = prompt_value
             st.rerun()
-    agent_command_text = st.text_area("Command", key="agent_command_text", height=80, placeholder="Example: Organize my week around my exam Friday and my two unfinished assignments.")
+
+    # Clear the command field BEFORE the keyed widget is instantiated.
+    # Updating a widget's own session-state key after st.text_area(...) runs
+    # raises StreamlitWidgetAlreadyInstantiatedError.
+    if st.session_state.get("_clear_agent_command_text", False):
+        st.session_state.agent_command_text = ""
+        st.session_state._clear_agent_command_text = False
+
+    agent_command_text = st.text_area(
+        "Command",
+        key="agent_command_text",
+        height=80,
+        placeholder="Example: Organize my week around my exam Friday and my two unfinished assignments.",
+    )
     if st.button("▶ Run Agent Command", key="run_agent_command", use_container_width=True) and agent_command_text.strip():
         prompt_text = agent_command_text.strip()
         save_chat_message(active_chat_id, AUTH_ID, "user", prompt_text)
@@ -8440,7 +8409,9 @@ elif st.session_state.page == 8:
         answer_text = streamed_answer if isinstance(streamed_answer, str) else str(streamed_answer)
         answer_text = answer_text.strip() or "I could not generate a response. Please try again."
         save_chat_message(active_chat_id, AUTH_ID, "assistant", answer_text)
-        st.session_state.agent_command_text = ""
+        # Request the clear for the next rerun; do not mutate the widget key
+        # after st.text_area(...) has already been instantiated.
+        st.session_state._clear_agent_command_text = True
         st.rerun()
 
     chat_prompt = st.chat_input("Message StudySphere AI…")
