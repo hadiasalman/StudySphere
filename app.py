@@ -25,7 +25,7 @@ from pathlib import Path
 from collections import Counter
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 try:
     from PIL import Image
@@ -806,7 +806,7 @@ def deployment_preflight_checks():
     checks.append({
         "Check": "Email verification",
         "Status": "PASS" if secrets_status["Email verification"] else "WARN",
-        "Details": "SMTP is configured" if secrets_status["Email verification"] else "SMTP is not configured; local account creation will be blocked until email delivery is set up.",
+        "Details": "Firebase email verification is configured" if secrets_status["Email verification"] else "Add FIREBASE_API_KEY and enable Email/Password sign-in in Firebase Console to allow account creation.",
     })
 
     checks.append({
@@ -879,6 +879,8 @@ def deployment_bundle_bytes(base_url=""):
         "# STUDYSPHERE_ADMIN_EMAIL=your-creator-email@example.com\n"
         "# DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/studysphere\n"
         "# GEMINI_API_KEY=YOUR_GEMINI_API_KEY\n"
+        "# FIREBASE_API_KEY=YOUR_FIREBASE_WEB_API_KEY\n"
+        "# Legacy SMTP settings below are not used for signup email verification\n"
         "# EMAIL_SMTP_HOST=smtp.gmail.com\n"
         "# EMAIL_SMTP_PORT=587\n"
         "# EMAIL_SMTP_USERNAME=your-email@gmail.com\n"
@@ -3816,23 +3818,18 @@ def configured_email_setting(name, default=""):
     return str(value or default).strip()
 
 
+def firebase_auth_api_key():
+    """Read the Firebase project's Web API key from Streamlit Secrets or env."""
+    return configured_email_setting("FIREBASE_API_KEY") or configured_email_setting("FIREBASE_WEB_API_KEY")
+
+
+def firebase_auth_configured():
+    return bool(firebase_auth_api_key())
+
+
 def email_verification_configured():
-    """Accept either SMTP credentials or the Resend HTTPS email API."""
-    provider = configured_email_setting("EMAIL_PROVIDER", "smtp").lower()
-    if provider in {"resend", "resend_api"}:
-        return bool(
-            configured_email_setting("RESEND_API_KEY")
-            and configured_email_setting("EMAIL_FROM_EMAIL")
-        )
-    if provider not in {"", "smtp", "gmail"}:
-        return False
-    return bool(
-        configured_email_setting("EMAIL_SMTP_HOST")
-        and configured_email_setting("EMAIL_SMTP_PORT", "587")
-        and configured_email_setting("EMAIL_SMTP_USERNAME")
-        and configured_email_setting("EMAIL_SMTP_PASSWORD")
-        and configured_email_setting("EMAIL_FROM_EMAIL", configured_email_setting("EMAIL_SMTP_USERNAME"))
-    )
+    """StudySphere signup verification now uses Firebase's built-in email service."""
+    return firebase_auth_configured()
 
 
 def send_studysphere_verification_email(recipient_email, verification_code):
@@ -4217,6 +4214,255 @@ def clear_signup_email_verification():
     st.session_state.signup_email_verification_email = ""
     st.session_state.signup_email_verification_sent_at = 0.0
 
+
+
+# ============================================================
+# FIREBASE AUTH EMAIL VERIFICATION
+# ============================================================
+# Firebase sends the verification link using Google's built-in email service,
+# so StudySphere does not need SMTP credentials or a custom sender domain.
+# Firebase handles only email verification here; StudySphere's existing local
+# password hashing, roles, database, and academic records remain unchanged.
+
+class FirebaseAuthError(RuntimeError):
+    def __init__(self, code, message):
+        self.code = str(code or "FIREBASE_AUTH_ERROR").strip().upper()
+        self.detail = str(message or "Firebase Authentication request failed.")
+        super().__init__(self.detail)
+
+
+def _firebase_auth_post(endpoint, payload):
+    api_key = firebase_auth_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "Firebase email verification is not configured. Add FIREBASE_API_KEY to Streamlit Secrets."
+        )
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:{endpoint}?key={quote_plus(api_key)}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            data = json.loads(raw or "{}")
+            if not isinstance(data, dict):
+                raise RuntimeError("Firebase returned an unexpected response.")
+            return data
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")[:1200]
+        try:
+            parsed = json.loads(raw) if raw else {}
+            message = str(((parsed.get("error") or {}).get("message") or raw or "Firebase request failed.")).strip()
+        except Exception:
+            message = raw or "Firebase request failed."
+        code = message.split(" :", 1)[0].split(":", 1)[0].strip().upper()
+        raise FirebaseAuthError(code, message) from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(
+            f"StudySphere could not reach Firebase Authentication ({type(reason).__name__}). Check the deployment connection."
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise RuntimeError("The Firebase Authentication request timed out. Please try again.") from exc
+
+
+def _firebase_error_for_user(exc):
+    code = getattr(exc, "code", "")
+    friendly = {
+        "EMAIL_EXISTS": "A Firebase account already exists for this email. Enter the same password you used previously to resume verification, or use Firebase's password reset flow.",
+        "INVALID_EMAIL": "Enter a valid email address.",
+        "WEAK_PASSWORD": "Use a password with at least 8 characters.",
+        "INVALID_PASSWORD": "The email or password does not match the pending Firebase account.",
+        "INVALID_LOGIN_CREDENTIALS": "The email or password does not match the pending Firebase account. Use the same password you entered when you first requested verification.",
+        "EMAIL_NOT_FOUND": "No Firebase account was found for this email. Start account creation again.",
+        "OPERATION_NOT_ALLOWED": "Enable Email/Password sign-in in Firebase Console → Authentication → Sign-in method.",
+        "API_KEY_INVALID": "Firebase rejected the API key. Copy the Web API key from your Firebase project settings into FIREBASE_API_KEY.",
+        "INVALID_API_KEY": "Firebase rejected the API key. Copy the Web API key from your Firebase project settings into FIREBASE_API_KEY.",
+        "TOO_MANY_ATTEMPTS_TRY_LATER": "Firebase temporarily limited requests. Please wait and try again later.",
+        "USER_DISABLED": "This Firebase account is disabled. Contact the StudySphere administrator.",
+        "INVALID_ID_TOKEN": "The pending verification session expired. Enter your email and password again to resume signup.",
+        "EXPIRED_OOB_CODE": "The email verification link expired. Request a new verification link.",
+        "INVALID_OOB_CODE": "That verification link is invalid or has already been used. Return to StudySphere and check verification status again.",
+    }
+    if code in friendly:
+        return friendly[code]
+    return f"Firebase Authentication error ({code or 'unknown error'}). Check Firebase Console settings and try again."
+
+
+def _firebase_start_or_resume_signup(email, password):
+    """Create a Firebase account or sign into an uncompleted prior signup."""
+    request_data = {"email": email, "password": password, "returnSecureToken": True}
+    try:
+        return _firebase_auth_post("signUp", request_data)
+    except FirebaseAuthError as exc:
+        if exc.code != "EMAIL_EXISTS":
+            raise
+        # A previous attempt may have created the Firebase identity before the
+        # browser/session was closed. Sign in with the same entered credentials
+        # so the user can resend/check verification instead of getting stuck.
+        return _firebase_auth_post("signInWithPassword", request_data)
+
+
+def _firebase_send_verification_link(id_token):
+    result = _firebase_auth_post(
+        "sendOobCode",
+        {"requestType": "VERIFY_EMAIL", "idToken": str(id_token or "")},
+    )
+    return str(result.get("email") or "")
+
+
+def _firebase_refresh_pending_token():
+    token = str(st.session_state.get("firebase_signup_id_token") or "")
+    token_expiry = float(st.session_state.get("firebase_signup_token_expires_at", 0) or 0)
+    if token and token_expiry > time.time() + 90:
+        return token
+
+    refresh_token = str(st.session_state.get("firebase_signup_refresh_token") or "")
+    api_key = firebase_auth_api_key()
+    if not api_key or not refresh_token:
+        raise RuntimeError(
+            "Your pending Firebase signup session has expired. Enter your email and password again to resume signup."
+        )
+    url = f"https://securetoken.googleapis.com/v1/token?key={quote_plus(api_key)}"
+    body = urlencode({"grant_type": "refresh_token", "refresh_token": refresh_token}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        token = str(data.get("id_token") or "")
+        if not token:
+            raise RuntimeError("Firebase did not return a refreshed authentication token. Resume signup with your email and password.")
+        st.session_state.firebase_signup_id_token = token
+        if data.get("refresh_token"):
+            st.session_state.firebase_signup_refresh_token = str(data["refresh_token"])
+        st.session_state.firebase_signup_token_expires_at = time.time() + int(data.get("expires_in", 3600) or 3600) - 60
+        return token
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")[:500]
+        try:
+            parsed = json.loads(raw) if raw else {}
+            message = str(((parsed.get("error") or {}).get("message") or raw)).strip()
+        except Exception:
+            message = raw
+        code = message.split(" :", 1)[0].split(":", 1)[0].strip().upper()
+        raise RuntimeError(_firebase_error_for_user(FirebaseAuthError(code, message))) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError("StudySphere could not reach Firebase to refresh the signup session. Please try again.") from exc
+
+
+def _firebase_current_signup_user():
+    id_token = _firebase_refresh_pending_token()
+    data = _firebase_auth_post("lookup", {"idToken": id_token})
+    users = data.get("users") or []
+    if not users or not isinstance(users[0], dict):
+        raise RuntimeError("Firebase could not find the pending signup. Start account creation again.")
+    return users[0]
+
+
+def _clear_firebase_signup_state():
+    for key in (
+        "firebase_signup_email",
+        "firebase_signup_name",
+        "firebase_signup_uid",
+        "firebase_signup_id_token",
+        "firebase_signup_refresh_token",
+        "firebase_signup_token_expires_at",
+        "firebase_signup_password_hash",
+        "firebase_signup_password_salt",
+        "firebase_signup_email_sent_at",
+        "firebase_signup_status_message",
+        "firebase_signup_error_message",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _firebase_finish_local_signup(email):
+    """Create the StudySphere row only after Firebase confirms emailVerified."""
+    email = clean_email(email)
+    pending_email = clean_email(st.session_state.get("firebase_signup_email") or "")
+    if not pending_email or pending_email != email:
+        raise ValueError("The pending signup email does not match. Enter the same email address used to request verification.")
+
+    firebase_user = _firebase_current_signup_user()
+    if clean_email(firebase_user.get("email") or "") != email:
+        raise ValueError("Firebase returned a different email address. Restart signup with the correct email.")
+    if not bool(firebase_user.get("emailVerified")):
+        return False, "Firebase has not confirmed this email yet. Open the verification link in your inbox, then check again."
+
+    name = clean_name(st.session_state.get("firebase_signup_name") or "")
+    password_salt = str(st.session_state.get("firebase_signup_password_salt") or "")
+    password_hash = str(st.session_state.get("firebase_signup_password_hash") or "")
+    if not name or not password_salt or not password_hash:
+        raise RuntimeError("Signup details were not retained in this session. Enter your name, email, and password again to resume signup.")
+
+    existing = cursor.execute(
+        "SELECT auth_id, name, password_hash FROM users WHERE lower(email) = ?",
+        (email,),
+    ).fetchone()
+    if existing and existing[2]:
+        raise ValueError("A StudySphere account with this email already exists. Please use Sign in instead.")
+
+    auth_id = str(existing[0]) if existing else f"firebase-{str(firebase_user.get('localId') or uuid.uuid4().hex)}"
+    now = datetime.now().isoformat(timespec="seconds")
+    recovery_code = generate_recovery_code()
+    recovery_salt, recovery_hash = hash_secret(recovery_code)
+    if existing:
+        cursor.execute(
+            "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ?, auth_provider = CASE WHEN oidc_subject IS NOT NULL THEN 'local+oidc' ELSE 'local' END, account_status = 'active' WHERE auth_id = ?",
+            (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, auth_id),
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, auth_provider, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID, "local", "active"),
+        )
+    conn.commit()
+    write_audit_log("account_created", auth_id, "student", auth_id, "New StudySphere local account created after Firebase email verification")
+    migrate_legacy_rows_to_first_local_account(auth_id)
+    _clear_firebase_signup_state()
+    clear_signup_email_verification()
+    st.session_state.pop("signup_verification_code", None)
+    st.session_state.signup_recovery_code = recovery_code
+    set_authenticated_user(auth_id, name, email)
+    return True, recovery_code
+
+
+@st.fragment(run_every="1s")
+def render_firebase_signup_resend_control(email):
+    """Firebase-link resend timer that visibly counts down each second."""
+    sent_at = float(st.session_state.get("firebase_signup_email_sent_at", 0) or 0)
+    remaining = max(0, int(60 - (time.time() - sent_at))) if sent_at else 0
+    if remaining > 0:
+        st.caption(f"You can request another verification link in {remaining} seconds.")
+    clicked = st.button(
+        "🔄 Resend verification link",
+        key="firebase_signup_resend_link",
+        use_container_width=True,
+        disabled=remaining > 0,
+    )
+    if not clicked:
+        return
+    try:
+        token = _firebase_refresh_pending_token()
+        _firebase_send_verification_link(token)
+        st.session_state.firebase_signup_email_sent_at = time.time()
+        st.session_state.firebase_signup_status_message = f"A new verification link was sent to {email}. Check Inbox and Spam/Junk."
+        st.session_state.firebase_signup_error_message = ""
+        st.rerun()
+    except FirebaseAuthError as exc:
+        st.session_state.firebase_signup_error_message = _firebase_error_for_user(exc)
+        st.rerun()
+    except Exception as exc:
+        st.session_state.firebase_signup_error_message = str(exc)
+        st.rerun()
 
 def set_authenticated_user(auth_id, name, email, auth_method="local"):
     st.session_state.auth_id = str(auth_id)
@@ -7499,15 +7745,25 @@ def render_auth_screen():
             st.login("university")
         st.markdown('<div style="text-align:center;color:var(--ss-muted);font-size:12px;margin:8px 0 16px;">or continue with StudySphere local sign-in</div>', unsafe_allow_html=True)
 
+    # Explicit, state-driven tab buttons prevent the form content from drifting
+    # out of sync with the selected Sign in / Create account label.
     tabs = ["Sign in", "Create account", "Forgot password"]
-    tab = st.radio(
-        "Account",
-        tabs,
-        index=tabs.index(st.session_state.show_login) if st.session_state.show_login in tabs else 0,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    st.session_state.show_login = tab
+    if st.session_state.get("show_login") not in tabs:
+        st.session_state.show_login = "Sign in"
+    tab_columns = st.columns(3)
+    with tab_columns[0]:
+        if st.button("Sign in", key="auth_nav_sign_in", type="primary" if st.session_state.show_login == "Sign in" else "secondary", use_container_width=True):
+            st.session_state.show_login = "Sign in"
+            st.rerun()
+    with tab_columns[1]:
+        if st.button("Create account", key="auth_nav_create_account", type="primary" if st.session_state.show_login == "Create account" else "secondary", use_container_width=True):
+            st.session_state.show_login = "Create account"
+            st.rerun()
+    with tab_columns[2]:
+        if st.button("Forgot password", key="auth_nav_forgot_password", type="primary" if st.session_state.show_login == "Forgot password" else "secondary", use_container_width=True):
+            st.session_state.show_login = "Forgot password"
+            st.rerun()
+    tab = st.session_state.show_login
 
     if tab == "Sign in":
         st.markdown("### Sign in")
@@ -7546,85 +7802,72 @@ def render_auth_screen():
 
     elif tab == "Create account":
         st.markdown("### Create your account")
+        st.caption("Verify your email through Firebase, then create your StudySphere account. No custom domain or SMTP settings are required.")
         name = st.text_input("Full name", key="signup_name")
         email = clean_email(st.text_input("Email address", key="signup_email"))
 
-        # If a user edits the email, the previous verification must not carry over.
-        pending_email = str(st.session_state.get("signup_email_verification_email") or "")
-        if pending_email and pending_email != email:
-            clear_signup_email_verification()
-            st.session_state.pop("signup_verification_code", None)
-
-        email_verified = (
-            bool(email)
-            and st.session_state.get("signup_email_verified") == email
-            and signup_email_verification_is_fresh(email)
-        )
-        if email and st.session_state.get("signup_email_verified") == email and not email_verified:
-            clear_signup_email_verification()
-            st.session_state.pop("signup_verification_code", None)
+        pending_email = clean_email(st.session_state.get("firebase_signup_email") or "")
+        if pending_email and email and pending_email != email:
+            # The Firebase identity may still exist, but this browser session is
+            # no longer continuing that email's verification attempt.
+            _clear_firebase_signup_state()
             pending_email = ""
-        verification_id = str(st.session_state.get("signup_email_verification_id") or "")
 
-        if not email_verified:
-            st.caption("Verify your email address before setting a password or creating an account.")
-            if not verification_id or pending_email != email:
-                send_code = st.button("📧 Send verification code", use_container_width=True, key="signup_send_verification_code")
-                if send_code:
-                    try:
-                        if not name.strip():
-                            st.error("Enter your full name first.")
-                        elif not valid_email(email):
-                            st.error("Enter a valid email address.")
-                        else:
-                            email_was_sent = send_email_verification_code(email)
-                            if email_was_sent:
-                                st.success(f"StudySphere submitted a verification email to {email}. Check Inbox, Spam/Junk, and Promotions. Delivery to Inbox is controlled by the email provider.")
-                            else:
-                                st.info("A verification request is already active for this address. StudySphere did not send a new email in this click. If you cannot find the earlier message, check Spam/Junk and use Resend when the countdown finishes.")
-                            st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                    except smtplib.SMTPAuthenticationError:
-                        st.error("The email provider rejected the SMTP login. Check EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD. For Gmail, use a Google App Password, not your normal account password.")
-                    except smtplib.SMTPConnectError:
-                        st.error("StudySphere could not establish an SMTP connection. Check EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, and the provider's SMTP availability.")
-                    except smtplib.SMTPRecipientsRefused:
-                        st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
-                    except (smtplib.SMTPException, ssl.SSLError):
-                        st.error("The secure email connection failed. For Gmail, use port 587 with STARTTLS or port 465 with SSL. Check the app logs for the exact SMTP error.")
-                    except (TimeoutError, OSError):
-                        st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
-                    except Exception as exc:
-                        # Avoid showing credentials or raw server responses in the public UI.
-                        st.error(f"Email delivery failed ({type(exc).__name__}). Check the app logs and SMTP settings.")
-            else:
-                st.info(f"A verification code was sent to {email}. It expires in {EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes.")
-                verification_code = st.text_input(
-                    "Email verification code",
-                    max_chars=6,
-                    placeholder="Enter the 6-digit code",
-                    key="signup_verification_code",
-                )
-                verify_clicked = st.button("✅ Verify email", use_container_width=True, key="signup_verify_email")
-                if verify_clicked:
-                    ok, message = verify_signup_email_code(email, verification_code)
-                    if ok:
-                        st.success(message)
-                        st.rerun()
+        has_pending_firebase_signup = bool(
+            pending_email
+            and pending_email == email
+            and st.session_state.get("firebase_signup_id_token")
+            and st.session_state.get("firebase_signup_refresh_token")
+        )
+
+        if has_pending_firebase_signup:
+            st.info(
+                f"Complete email verification for {email}. If the link arrives, open it and then return to this StudySphere tab "
+                "and click ‘I've verified my email’. You can resend the link below if needed."
+            )
+            status_message = str(st.session_state.get("firebase_signup_status_message") or "").strip()
+            error_message = str(st.session_state.get("firebase_signup_error_message") or "").strip()
+            if status_message:
+                st.success(status_message)
+            if error_message:
+                st.error(error_message)
+
+            verify_now = st.button(
+                "✅ I've verified my email — continue",
+                key="firebase_signup_check_verified",
+                use_container_width=True,
+                type="primary",
+            )
+            if verify_now:
+                try:
+                    finished, result = _firebase_finish_local_signup(email)
+                    if finished:
+                        st.success("Email verified and StudySphere account created successfully.")
+                        st.info("Save your recovery code somewhere safe. It is shown only once.")
+                        st.code(result)
+                        st.caption("Your account is ready. Click Continue to open StudySphere.")
                     else:
-                        st.error(message)
+                        st.warning(result)
+                except FirebaseAuthError as exc:
+                    st.error(_firebase_error_for_user(exc))
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception as exc:
+                    st.error(str(exc) or "Could not confirm Firebase email verification. Please try again.")
 
-                render_signup_resend_control(email)
-
+            if st.session_state.get("firebase_signup_email"):
+                render_firebase_signup_resend_control(email)
+            if st.button("Use a different email", key="firebase_signup_cancel_pending", use_container_width=True):
+                _clear_firebase_signup_state()
+                st.rerun()
+            if st.session_state.get("auth_id") and st.session_state.get("signup_recovery_code"):
+                if st.button("Continue to StudySphere", key="firebase_signup_continue_dashboard", use_container_width=True, type="primary"):
+                    st.session_state.signup_recovery_code = ""
+                    st.rerun()
         else:
-            st.success("✅ Email verified")
-            st.caption("Complete your account setup. The verification must still be fresh when you submit.")
             password = st.text_input("Password", type="password", key="signup_password")
             confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
-            create_account = st.button("✨ Create account", use_container_width=True, key="signup_create_account")
+            create_account = st.button("✨ Create account", key="firebase_signup_start", use_container_width=True, type="primary")
 
             if create_account:
                 name = clean_name(name)
@@ -7633,61 +7876,71 @@ def render_auth_screen():
                     st.error("Please complete all fields.")
                 elif not valid_email(email):
                     st.error("Enter a valid email address.")
-                elif not signup_email_verification_is_fresh(email):
-                    st.error("Please verify this email again. The verification session has expired.")
                 elif len(password) < 8:
                     st.error("Use a password with at least 8 characters.")
                 elif password != confirm:
                     st.error("Passwords do not match.")
+                elif not firebase_auth_configured():
+                    st.error("Firebase email verification is not configured. Add FIREBASE_API_KEY to Streamlit Secrets and enable Email/Password sign-in in Firebase Console.")
                 else:
                     existing = cursor.execute(
                         "SELECT auth_id, name, password_hash FROM users WHERE lower(email) = ?",
                         (email,),
                     ).fetchone()
                     if existing and existing[2]:
-                        st.error("An account with this email already exists. Please sign in instead.")
+                        st.error("A StudySphere account with this email already exists. Please use Sign in instead.")
                     else:
-                        auth_id = existing[0] if existing else f"local-{uuid.uuid4().hex}"
-                        now = datetime.now().isoformat(timespec="seconds")
-                        password_salt, password_hash = hash_secret(password)
-                        recovery_code = generate_recovery_code()
-                        recovery_salt, recovery_hash = hash_secret(recovery_code)
                         try:
-                            # Re-check immediately before writing the account so a stale UI state cannot bypass verification.
-                            if not signup_email_verification_is_fresh(email):
-                                raise ValueError("Please verify your email again before creating the account.")
-                            if existing:
-                                cursor.execute(
-                                    "UPDATE users SET name = ?, email = ?, password_hash = ?, password_salt = ?, recovery_hash = ?, recovery_salt = ?, password_changed_at = ?, auth_provider = CASE WHEN oidc_subject IS NOT NULL THEN 'local+oidc' ELSE 'local' END, account_status = 'active' WHERE auth_id = ?",
-                                    (name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, auth_id),
-                                )
+                            password_salt, password_hash = hash_secret(password)
+                            firebase_auth = _firebase_start_or_resume_signup(email, password)
+                            id_token = str(firebase_auth.get("idToken") or "")
+                            refresh_token = str(firebase_auth.get("refreshToken") or "")
+                            if not id_token or not refresh_token:
+                                raise RuntimeError("Firebase did not return a valid signup session. Please try again.")
+
+                            st.session_state.firebase_signup_email = email
+                            st.session_state.firebase_signup_name = name
+                            st.session_state.firebase_signup_uid = str(firebase_auth.get("localId") or "")
+                            st.session_state.firebase_signup_id_token = id_token
+                            st.session_state.firebase_signup_refresh_token = refresh_token
+                            st.session_state.firebase_signup_token_expires_at = time.time() + int(firebase_auth.get("expiresIn", 3600) or 3600) - 60
+                            st.session_state.firebase_signup_password_hash = password_hash
+                            st.session_state.firebase_signup_password_salt = password_salt
+                            st.session_state.firebase_signup_email_sent_at = 0.0
+                            st.session_state.firebase_signup_status_message = ""
+                            st.session_state.firebase_signup_error_message = ""
+
+                            firebase_user = _firebase_current_signup_user()
+                            if bool(firebase_user.get("emailVerified")):
+                                finished, result = _firebase_finish_local_signup(email)
+                                if finished:
+                                    st.success("Your email is already verified. StudySphere account created successfully.")
+                                    st.info("Save your recovery code somewhere safe. It is shown only once.")
+                                    st.code(result)
+                                    st.caption("Click Continue to open StudySphere.")
                             else:
-                                # Public signup always creates a student; role escalation is handled separately.
-                                cursor.execute(
-                                    "INSERT INTO users (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, created_at, last_seen_at, password_changed_at, role, institution_id, auth_provider, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                    (auth_id, name, email, password_hash, password_salt, recovery_hash, recovery_salt, now, now, now, "student", DEFAULT_INSTITUTION_ID, "local", "active"),
-                                )
-                            conn.commit()
-                            write_audit_log("account_created", auth_id, "student", auth_id, "New local StudySphere account created after email verification")
-                            migrate_legacy_rows_to_first_local_account(auth_id)
-                            st.session_state.signup_recovery_code = recovery_code
-                            clear_signup_email_verification()
-                            st.session_state.pop("signup_verification_code", None)
-                            set_authenticated_user(auth_id, name, email)
-                            st.success("Account created successfully.")
-                            st.info("Save your recovery code somewhere safe. You will need it if you forget your password.")
-                            st.code(recovery_code)
-                            st.rerun()
-                        except sqlite3.IntegrityError:
-                            st.error("That email is already registered. Try signing in instead.")
+                                try:
+                                    _firebase_send_verification_link(id_token)
+                                    st.session_state.firebase_signup_email_sent_at = time.time()
+                                    st.session_state.firebase_signup_status_message = f"Firebase sent a verification link to {email}. Check Inbox and Spam/Junk."
+                                except FirebaseAuthError as exc:
+                                    st.session_state.firebase_signup_error_message = _firebase_error_for_user(exc)
+                                except Exception as exc:
+                                    st.session_state.firebase_signup_error_message = str(exc) or "Could not send the Firebase verification link."
+                                st.rerun()
+                        except FirebaseAuthError as exc:
+                            st.error(_firebase_error_for_user(exc))
                         except ValueError as exc:
                             st.error(str(exc))
-                        except Exception:
-                            try:
-                                conn.rollback()
-                            except Exception:
-                                pass
-                            st.error("Account creation failed. Please try again.")
+                        except Exception as exc:
+                            st.error(str(exc) or "Could not start Firebase email verification. Please try again.")
+
+            # Continue button is shown after account creation/check succeeds. This
+            # separate click gives the user a chance to save the recovery code.
+            if st.session_state.get("auth_id") and st.session_state.get("signup_recovery_code"):
+                if st.button("Continue to StudySphere", key="firebase_signup_continue_dashboard_immediate", use_container_width=True, type="primary"):
+                    st.session_state.signup_recovery_code = ""
+                    st.rerun()
 
     else:
         st.markdown("### Reset your password")
