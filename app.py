@@ -3827,7 +3827,7 @@ def email_verification_configured():
 
 
 def send_studysphere_verification_email(recipient_email, verification_code):
-    """Send a real email. Never print or expose the verification code in the UI or logs."""
+    """Send a verification email using secure SMTP (SSL on 465 or STARTTLS on 587)."""
     recipient_email = clean_email(recipient_email)
     smtp_host = configured_email_setting("EMAIL_SMTP_HOST")
     smtp_port_raw = configured_email_setting("EMAIL_SMTP_PORT", "587")
@@ -3837,6 +3837,7 @@ def send_studysphere_verification_email(recipient_email, verification_code):
     from_name = configured_email_setting("EMAIL_FROM_NAME", "StudySphere")
     use_tls_raw = configured_email_setting("EMAIL_USE_TLS", "true").lower()
     use_tls = use_tls_raw not in {"0", "false", "no", "off"}
+    security = configured_email_setting("EMAIL_SMTP_SECURITY", "").strip().lower()
 
     if not smtp_host or not smtp_username or not smtp_password or not from_email:
         raise RuntimeError(
@@ -3846,9 +3847,26 @@ def send_studysphere_verification_email(recipient_email, verification_code):
     try:
         smtp_port = int(smtp_port_raw)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("EMAIL_SMTP_PORT must be a valid number, such as 587.") from exc
+        raise RuntimeError("EMAIL_SMTP_PORT must be a valid number, such as 587 or 465.") from exc
     if not (1 <= smtp_port <= 65535):
         raise RuntimeError("EMAIL_SMTP_PORT must be between 1 and 65535.")
+
+    # Select the correct secure SMTP protocol. Gmail's usual options are:
+    # 587 = STARTTLS; 465 = implicit SSL. EMAIL_SMTP_SECURITY can override
+    # the automatic selection with exactly "starttls" or "ssl".
+    if not security:
+        if smtp_port == 465:
+            security = "ssl"
+        elif use_tls:
+            security = "starttls"
+        else:
+            security = "none"
+
+    if security not in {"ssl", "starttls"}:
+        raise RuntimeError(
+            "Secure SMTP is required. Use EMAIL_SMTP_PORT='587' with EMAIL_USE_TLS='true', "
+            "or EMAIL_SMTP_PORT='465' for implicit SSL."
+        )
 
     message = EmailMessage()
     message["Subject"] = "StudySphere email verification code"
@@ -3861,13 +3879,34 @@ def send_studysphere_verification_email(recipient_email, verification_code):
         "Do not share this code with anyone. If you did not request it, you can ignore this email.\n\n"
         "StudySphere — Learn smarter. Plan better. Achieve more."
     )
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
-        smtp.ehlo()
-        if use_tls:
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.ehlo()
-        smtp.login(smtp_username, smtp_password)
-        smtp.send_message(message)
+
+    try:
+        if security == "ssl":
+            with smtplib.SMTP_SSL(
+                smtp_host,
+                smtp_port,
+                timeout=20,
+                context=ssl.create_default_context(),
+            ) as smtp:
+                smtp.ehlo()
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+    except Exception as exc:
+        # Log the SMTP exception for debugging in Streamlit Cloud logs. Never log
+        # the sender password or verification code.
+        print(
+            f"[StudySphere SMTP] {type(exc).__name__}: {str(exc)[:300]}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
 
 
 def cleanup_email_verifications():
@@ -7429,7 +7468,7 @@ def render_auth_screen():
                     except smtplib.SMTPRecipientsRefused:
                         st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
                     except (smtplib.SMTPException, ssl.SSLError):
-                        st.error("The secure email connection failed. Check the SMTP host, port, and TLS settings.")
+                        st.error("The secure email connection failed. For Gmail, use port 587 with STARTTLS or port 465 with SSL. Check the app logs for the exact SMTP error.")
                     except (TimeoutError, OSError):
                         st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
                     except Exception as exc:
@@ -7479,7 +7518,7 @@ def render_auth_screen():
                     except smtplib.SMTPRecipientsRefused:
                         st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
                     except (smtplib.SMTPException, ssl.SSLError):
-                        st.error("The secure email connection failed. Check the SMTP host, port, and TLS settings.")
+                        st.error("The secure email connection failed. For Gmail, use port 587 with STARTTLS or port 465 with SSL. Check the app logs for the exact SMTP error.")
                     except (TimeoutError, OSError):
                         st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
                     except Exception as exc:
