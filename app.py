@@ -7422,8 +7422,19 @@ def render_auth_screen():
                         st.error(str(exc))
                     except RuntimeError as exc:
                         st.error(str(exc))
-                    except Exception:
-                        st.error("We could not send the verification email. Check the SMTP settings and try again.")
+                    except smtplib.SMTPAuthenticationError:
+                        st.error("The email provider rejected the SMTP login. Check EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD. For Gmail, use a Google App Password, not your normal account password.")
+                    except smtplib.SMTPConnectError:
+                        st.error("StudySphere could not establish an SMTP connection. Check EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, and the provider's SMTP availability.")
+                    except smtplib.SMTPRecipientsRefused:
+                        st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
+                    except (smtplib.SMTPException, ssl.SSLError):
+                        st.error("The secure email connection failed. Check the SMTP host, port, and TLS settings.")
+                    except (TimeoutError, OSError):
+                        st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
+                    except Exception as exc:
+                        # Avoid showing credentials or raw server responses in the public UI.
+                        st.error(f"Email delivery failed ({type(exc).__name__}). Check the app logs and SMTP settings.")
             else:
                 st.info(f"A verification code was sent to {email}. It expires in {EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes.")
                 verification_code = st.text_input(
@@ -7461,8 +7472,19 @@ def render_auth_screen():
                         st.error(str(exc))
                     except RuntimeError as exc:
                         st.error(str(exc))
-                    except Exception:
-                        st.error("We could not send a new verification email. Please try again later.")
+                    except smtplib.SMTPAuthenticationError:
+                        st.error("The email provider rejected the SMTP login. Check EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD. For Gmail, use a Google App Password, not your normal account password.")
+                    except smtplib.SMTPConnectError:
+                        st.error("StudySphere could not establish an SMTP connection. Check EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, and the provider's SMTP availability.")
+                    except smtplib.SMTPRecipientsRefused:
+                        st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
+                    except (smtplib.SMTPException, ssl.SSLError):
+                        st.error("The secure email connection failed. Check the SMTP host, port, and TLS settings.")
+                    except (TimeoutError, OSError):
+                        st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
+                    except Exception as exc:
+                        # Avoid showing credentials or raw server responses in the public UI.
+                        st.error(f"Email delivery failed ({type(exc).__name__}). Check the app logs and SMTP settings.")
 
         else:
             st.success("✅ Email verified")
