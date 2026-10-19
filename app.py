@@ -3977,7 +3977,11 @@ def send_email_verification_code(email, force_new=False):
             st.session_state.signup_email_verified = ""
             st.session_state.signup_email_verification_email = email
             st.session_state.signup_email_verification_sent_at = time.time() - elapsed
-            return str(pending[0])
+            # This branch reuses an existing request; it does not send another
+            # email because only a salted hash of the original code is stored.
+            # Returning False prevents the UI from falsely claiming a new email
+            # was sent when SMTP was not called during this click.
+            return False
 
     recent = cursor.execute(
         "SELECT created_at FROM email_verifications WHERE lower(email) = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
@@ -4032,7 +4036,7 @@ def send_email_verification_code(email, force_new=False):
     st.session_state.signup_email_verified = ""
     st.session_state.signup_email_verification_email = email
     st.session_state.signup_email_verification_sent_at = time.time()
-    return verification_id
+    return True
 
 
 def verify_signup_email_code(email, verification_code):
@@ -7362,6 +7366,52 @@ def sync_university_sso_user():
     return True
 
 
+@st.fragment(run_every="1s")
+def render_signup_resend_control(email):
+    """Show a live resend countdown and only enable resend when it expires."""
+    sent_at = float(st.session_state.get("signup_email_verification_sent_at", 0.0) or 0.0)
+    if sent_at:
+        # A one-second grace allowance avoids a mismatch between the browser's
+        # countdown and the database's whole-second rate-limit timestamps.
+        elapsed = max(0, time.time() - sent_at)
+        resend_remaining = max(0, EMAIL_VERIFICATION_RESEND_SECONDS + 1 - int(elapsed))
+    else:
+        resend_remaining = 0
+
+    if resend_remaining > 0:
+        st.caption(f"You can request another code in {resend_remaining} seconds.")
+
+    resend_code = st.button(
+        "🔄 Resend verification code",
+        use_container_width=True,
+        disabled=resend_remaining > 0,
+        key="signup_resend_verification_code",
+    )
+    if not resend_code:
+        return
+
+    try:
+        send_email_verification_code(email, force_new=True)
+        st.success("StudySphere submitted a new verification email. Check Inbox, Spam/Junk, and Promotions.")
+        st.rerun()
+    except ValueError as exc:
+        st.error(str(exc))
+    except RuntimeError as exc:
+        st.error(str(exc))
+    except smtplib.SMTPAuthenticationError:
+        st.error("The email provider rejected the SMTP login. Check EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD. For Gmail, use a Google App Password, not your normal account password.")
+    except smtplib.SMTPConnectError:
+        st.error("StudySphere could not establish an SMTP connection. Check EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, and the provider's SMTP availability.")
+    except smtplib.SMTPRecipientsRefused:
+        st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
+    except (smtplib.SMTPException, ssl.SSLError):
+        st.error("The secure email connection failed. Check the [StudySphere SMTP] error in Streamlit Cloud logs.")
+    except (TimeoutError, OSError):
+        st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
+    except Exception as exc:
+        st.error(f"Email delivery failed ({type(exc).__name__}). Check the app logs and SMTP settings.")
+
+
 def render_auth_screen():
     st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
     st.markdown(
@@ -7454,8 +7504,11 @@ def render_auth_screen():
                         elif not valid_email(email):
                             st.error("Enter a valid email address.")
                         else:
-                            send_email_verification_code(email)
-                            st.success(f"A 6-digit verification code was sent to {email}. Check your inbox and spam folder.")
+                            email_was_sent = send_email_verification_code(email)
+                            if email_was_sent:
+                                st.success(f"StudySphere submitted a verification email to {email}. Check Inbox, Spam/Junk, and Promotions. Delivery to Inbox is controlled by the email provider.")
+                            else:
+                                st.info("A verification request is already active for this address. StudySphere did not send a new email in this click. If you cannot find the earlier message, check Spam/Junk and use Resend when the countdown finishes.")
                             st.rerun()
                     except ValueError as exc:
                         st.error(str(exc))
@@ -7491,39 +7544,7 @@ def render_auth_screen():
                     else:
                         st.error(message)
 
-                sent_at = float(st.session_state.get("signup_email_verification_sent_at", 0.0) or 0.0)
-                resend_remaining = max(0, EMAIL_VERIFICATION_RESEND_SECONDS - int(time.time() - sent_at)) if sent_at else 0
-                resend_disabled = resend_remaining > 0
-                if resend_disabled:
-                    st.caption(f"You can request another code in {resend_remaining} seconds.")
-                resend_code = st.button(
-                    "🔄 Resend verification code",
-                    use_container_width=True,
-                    disabled=resend_disabled,
-                    key="signup_resend_verification_code",
-                )
-                if resend_code:
-                    try:
-                        send_email_verification_code(email, force_new=True)
-                        st.success("A new verification code was sent.")
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                    except smtplib.SMTPAuthenticationError:
-                        st.error("The email provider rejected the SMTP login. Check EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD. For Gmail, use a Google App Password, not your normal account password.")
-                    except smtplib.SMTPConnectError:
-                        st.error("StudySphere could not establish an SMTP connection. Check EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, and the provider's SMTP availability.")
-                    except smtplib.SMTPRecipientsRefused:
-                        st.error("The email provider rejected the recipient address. Check the email address and sender/provider restrictions.")
-                    except (smtplib.SMTPException, ssl.SSLError):
-                        st.error("The secure email connection failed. For Gmail, use port 587 with STARTTLS or port 465 with SSL. Check the app logs for the exact SMTP error.")
-                    except (TimeoutError, OSError):
-                        st.error("StudySphere could not reach the email server. Check the SMTP host/port and whether the deployment allows outbound SMTP connections.")
-                    except Exception as exc:
-                        # Avoid showing credentials or raw server responses in the public UI.
-                        st.error(f"Email delivery failed ({type(exc).__name__}). Check the app logs and SMTP settings.")
+                render_signup_resend_control(email)
 
         else:
             st.success("✅ Email verified")
