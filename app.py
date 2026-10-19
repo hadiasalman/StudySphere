@@ -3817,6 +3817,15 @@ def configured_email_setting(name, default=""):
 
 
 def email_verification_configured():
+    """Accept either SMTP credentials or the Resend HTTPS email API."""
+    provider = configured_email_setting("EMAIL_PROVIDER", "smtp").lower()
+    if provider in {"resend", "resend_api"}:
+        return bool(
+            configured_email_setting("RESEND_API_KEY")
+            and configured_email_setting("EMAIL_FROM_EMAIL")
+        )
+    if provider not in {"", "smtp", "gmail"}:
+        return False
     return bool(
         configured_email_setting("EMAIL_SMTP_HOST")
         and configured_email_setting("EMAIL_SMTP_PORT", "587")
@@ -3827,8 +3836,71 @@ def email_verification_configured():
 
 
 def send_studysphere_verification_email(recipient_email, verification_code):
-    """Send a verification email using secure SMTP (SSL on 465 or STARTTLS on 587)."""
+    """Send verification mail via Resend HTTPS API or secure SMTP."""
     recipient_email = clean_email(recipient_email)
+    provider = configured_email_setting("EMAIL_PROVIDER", "smtp").lower()
+
+    # HTTPS API mode avoids a direct SMTP connection. This is useful on hosting
+    # environments where outbound SMTP connections are interrupted.
+    if provider in {"resend", "resend_api"}:
+        api_key = configured_email_setting("RESEND_API_KEY")
+        from_email = configured_email_setting("EMAIL_FROM_EMAIL")
+        from_name = configured_email_setting("EMAIL_FROM_NAME", "StudySphere")
+        if not api_key or not from_email:
+            raise RuntimeError(
+                "Resend email is not configured. Add RESEND_API_KEY and EMAIL_FROM_EMAIL to Streamlit Secrets."
+            )
+        payload = {
+            "from": formataddr((from_name, from_email)),
+            "to": [recipient_email],
+            "subject": "StudySphere email verification code",
+            "text": (
+                "Welcome to StudySphere.\n\n"
+                f"Your email verification code is: {verification_code}\n\n"
+                f"This code expires in {EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes. "
+                "Do not share this code with anyone. If you did not request it, you can ignore this email.\n\n"
+                "StudySphere — Learn smarter. Plan better. Achieve more."
+            ),
+        }
+        request = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "StudySphere/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                response_body = response.read().decode("utf-8", errors="replace")
+                if not 200 <= int(response.status) < 300:
+                    raise RuntimeError(f"Resend API returned HTTP {response.status}.")
+                # An HTTP success means accepted by the provider, not guaranteed Inbox delivery.
+                try:
+                    response_data = json.loads(response_body or "{}")
+                except json.JSONDecodeError:
+                    response_data = {}
+                if not response_data.get("id"):
+                    raise RuntimeError("Resend API did not confirm an email ID. Check the Resend dashboard logs.")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            try:
+                parsed = json.loads(detail) if detail else {}
+                detail = str(parsed.get("message") or parsed.get("name") or parsed.get("error") or detail)
+            except Exception:
+                pass
+            print(f"[StudySphere Email API] HTTP {exc.code}: {detail[:300]}", file=sys.stderr, flush=True)
+            if exc.code in {401, 403}:
+                raise RuntimeError("Resend rejected the API key or sender. Check RESEND_API_KEY and verify the sender domain in Resend.") from exc
+            raise RuntimeError(f"Resend email API returned HTTP {exc.code}. Check the sender/domain and Resend dashboard logs.") from exc
+        except urllib.error.URLError as exc:
+            print(f"[StudySphere Email API] Connection error: {type(exc.reason).__name__}: {str(exc.reason)[:250]}", file=sys.stderr, flush=True)
+            raise RuntimeError("StudySphere could not reach the Resend HTTPS API. Check the deployment logs and network status.") from exc
+        return
+
     smtp_host = configured_email_setting("EMAIL_SMTP_HOST")
     smtp_port_raw = configured_email_setting("EMAIL_SMTP_PORT", "587")
     smtp_username = configured_email_setting("EMAIL_SMTP_USERNAME")
@@ -3942,7 +4014,8 @@ def send_email_verification_code(email, force_new=False):
         raise ValueError("Enter a valid email address before requesting a verification code.")
     if not email_verification_configured():
         raise RuntimeError(
-            "Email verification is not configured on this deployment. The administrator must add the SMTP settings in Streamlit Secrets."
+            "Email verification is not configured. Set EMAIL_PROVIDER='resend' with RESEND_API_KEY and EMAIL_FROM_EMAIL, "
+            "or provide all required SMTP settings in Streamlit Secrets."
         )
 
     existing = cursor.execute(
